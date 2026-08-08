@@ -1,6 +1,7 @@
 import { createMockEvents } from "../data/mock-calendar.js";
 import { CalendarRepository } from "./calendar-repository.js";
 import { findBufferWarnings } from "./booking-proximity.js";
+import { getOperatorProfile } from "../state.js";
 
 const STORAGE_KEY = "tamafit_staff_calendar_events_v1";
 const HISTORY_STORAGE_KEY = "tamafit_staff_calendar_history_v1";
@@ -48,7 +49,7 @@ export class LocalCalendarRepository extends CalendarRepository {
 
   writeHistory(entries) {
     try {
-      this.storage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 100)));
+      this.storage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 50)));
     } catch {
       // The local preview remains usable when storage is unavailable.
     }
@@ -60,7 +61,7 @@ export class LocalCalendarRepository extends CalendarRepository {
     this.writeHistory([{
       timestamp: new Date().toISOString(),
       action,
-      source: "ローカル確認",
+      source: getOperatorProfile()?.name || "未設定端末",
       id: current.id,
       customerName: current.customerName,
       trainerName: current.trainerId === "tamai" ? "玉井" : current.trainerId === "obayashi" ? "大林" : "指定なし",

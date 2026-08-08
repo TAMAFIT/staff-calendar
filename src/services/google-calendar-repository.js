@@ -1,4 +1,5 @@
 import { GOOGLE_APPS_SCRIPT_URL } from "../config.js";
+import { loadOperatorId } from "../state.js";
 import { CalendarRepository } from "./calendar-repository.js";
 import { findBufferWarnings } from "./booking-proximity.js";
 
@@ -42,7 +43,7 @@ export class GoogleCalendarRepository extends CalendarRepository {
       method: "POST",
       redirect: "follow",
       // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
-      body: JSON.stringify({ action, ...data })
+      body: JSON.stringify({ action, operatorId: loadOperatorId(), ...data })
     });
     if (!response.ok) throw new Error("Googleカレンダーに接続できませんでした。");
     return ensureSuccess(await response.json());

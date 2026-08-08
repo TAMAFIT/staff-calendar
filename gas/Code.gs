@@ -19,6 +19,9 @@ const STAFF_LIST_CACHE_SECONDS = 20;
 const STAFF_CACHE_VERSION_KEY = "tamafit_staff_calendar_cache_version";
 const STAFF_AUDIT_PREFIX = "tamafit_staff_calendar_audit_";
 const STAFF_AUDIT_MAX_ENTRIES = 50;
+const STAFF_SNAPSHOT_PREFIX = "tamafit_staff_calendar_snapshot_";
+const STAFF_SNAPSHOT_INITIALIZED_KEY = "tamafit_staff_calendar_snapshot_initialized_at";
+const STAFF_SNAPSHOT_MAX_ENTRIES = 100;
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -30,6 +33,11 @@ const STAFF_TYPES = {
   blocked: "予約ブロック",
   tentative: "仮予約枠",
   event: "イベント"
+};
+const STAFF_OPERATORS = {
+  tamai: "玉井",
+  obayashi: "大林",
+  store: "店舗用端末"
 };
 
 function doGet(e) {
@@ -73,21 +81,21 @@ function doPost(e) {
 
     if (action === "staffCalendarCreate") {
       return staffResponse_(staffWithLock_(function() {
-        const event = staffCreateEvent_(data.event || {});
+        const event = staffCreateEvent_(data.event || {}, data.operatorId);
         return { status: "success", event: event };
       }));
     }
 
     if (action === "staffCalendarUpdate") {
       return staffResponse_(staffWithLock_(function() {
-        const event = staffUpdateEvent_(data.id, data.event || {});
+        const event = staffUpdateEvent_(data.id, data.event || {}, data.operatorId);
         return { status: "success", event: event };
       }));
     }
 
     if (action === "staffCalendarDelete") {
       return staffResponse_(staffWithLock_(function() {
-        staffDeleteEvent_(data.id);
+        staffDeleteEvent_(data.id, data.operatorId);
         return { status: "success" };
       }));
     }
@@ -117,6 +125,7 @@ function staffListEvents_(startDate, endDate) {
   const events = staffCalendar_().getEvents(start, end)
     .map(staffSerializeEvent_)
     .sort(function(a, b) { return a.startAt.localeCompare(b.startAt); });
+  staffReconcileDirectChanges_(events, startDate, endDate);
   try {
     cache.put(cacheKey, JSON.stringify(events), STAFF_LIST_CACHE_SECONDS);
   } catch (error) {
@@ -132,7 +141,7 @@ function staffGetEvent_(id) {
   return staffSerializeEvent_(event);
 }
 
-function staffCreateEvent_(input) {
+function staffCreateEvent_(input, operatorId) {
   const reservation = staffNormalizeInput_(input);
   staffEnsureNoConflict_(reservation, "");
 
@@ -143,12 +152,13 @@ function staffCreateEvent_(input) {
   );
   staffWriteMetadata_(event, reservation);
   const created = staffSerializeEvent_(event);
-  staffWriteAudit_("作成", null, created);
+  staffWriteAudit_("作成", null, created, staffOperatorName_(operatorId));
+  staffStoreSnapshot_(created);
   staffBumpCacheVersion_();
   return created;
 }
 
-function staffUpdateEvent_(id, input) {
+function staffUpdateEvent_(id, input, operatorId) {
   if (!id) throw new Error("予約IDがありません。");
   const event = staffCalendar_().getEventById(String(id));
   if (!event) throw new Error("予約が見つかりませんでした。");
@@ -160,18 +170,20 @@ function staffUpdateEvent_(id, input) {
   event.setTime(staffParseDateTime_(reservation.startAt), staffParseDateTime_(reservation.endAt));
   staffWriteMetadata_(event, reservation);
   const updated = staffSerializeEvent_(event);
-  staffWriteAudit_("変更", before, updated);
+  staffWriteAudit_("変更", before, updated, staffOperatorName_(operatorId));
+  staffStoreSnapshot_(updated);
   staffBumpCacheVersion_();
   return updated;
 }
 
-function staffDeleteEvent_(id) {
+function staffDeleteEvent_(id, operatorId) {
   if (!id) throw new Error("予約IDがありません。");
   const event = staffCalendar_().getEventById(String(id));
   if (!event) throw new Error("予約が見つかりませんでした。");
   const deleted = staffSerializeEvent_(event);
   event.deleteEvent();
-  staffWriteAudit_("削除", deleted, null);
+  staffWriteAudit_("削除", deleted, null, staffOperatorName_(operatorId));
+  staffDeleteSnapshot_(deleted.id);
   staffBumpCacheVersion_();
 }
 
@@ -241,7 +253,8 @@ function staffSerializeEvent_(event) {
     notes: metadata.notes || staffPlainDescription_(event.getDescription()),
     status: "confirmed",
     source: "google-calendar",
-    isManaged: Boolean(metadata.version)
+    isManaged: Boolean(metadata.version),
+    lastUpdated: event.getLastUpdated().getTime()
   };
 }
 
@@ -354,6 +367,10 @@ function staffBumpCacheVersion_() {
   PropertiesService.getScriptProperties().setProperty(STAFF_CACHE_VERSION_KEY, String(version + 1));
 }
 
+function staffOperatorName_(operatorId) {
+  return STAFF_OPERATORS[String(operatorId || "")] || "未設定端末";
+}
+
 function initializeStaffCalendarAudit() {
   const properties = PropertiesService.getScriptProperties();
   const probeKey = STAFF_AUDIT_PREFIX + "setup_probe";
@@ -362,7 +379,7 @@ function initializeStaffCalendarAudit() {
   return true;
 }
 
-function staffWriteAudit_(action, before, after) {
+function staffWriteAudit_(action, before, after, source) {
   try {
     const current = after || before;
     if (!current) return;
@@ -371,7 +388,7 @@ function staffWriteAudit_(action, before, after) {
     const entry = {
       timestamp: Utilities.formatDate(now, STAFF_TIMEZONE, "yyyy-MM-dd HH:mm:ss"),
       action: action,
-      source: "スタッフカレンダー",
+      source: staffAuditText_(source || "スタッフカレンダー", 100),
       id: staffAuditText_(current.id, 300),
       customerName: staffAuditText_(current.customerName, 300),
       trainerName: STAFF_TRAINERS[current.trainerId] || "指定なし",
@@ -392,6 +409,126 @@ function staffWriteAudit_(action, before, after) {
 
 function staffAuditText_(value, maxLength) {
   return String(value || "").slice(0, maxLength);
+}
+
+function staffSnapshotKey_(id) {
+  return STAFF_SNAPSHOT_PREFIX + String(id || "");
+}
+
+function staffSnapshotRecord_(event) {
+  return {
+    id: staffAuditText_(event.id, 300),
+    customerName: staffAuditText_(event.customerName, 300),
+    trainerId: staffAuditText_(event.trainerId, 30),
+    startAt: staffAuditText_(event.startAt, 40),
+    endAt: staffAuditText_(event.endAt, 40),
+    duration: Number(event.duration || 0),
+    type: staffAuditText_(event.type, 100),
+    notes: staffAuditText_(event.notes, 1000),
+    lastUpdated: Number(event.lastUpdated || 0),
+    seenAt: Date.now()
+  };
+}
+
+function staffSnapshotFingerprint_(event) {
+  return JSON.stringify([
+    event.customerName || "",
+    event.trainerId || "",
+    event.startAt || "",
+    event.endAt || "",
+    Number(event.duration || 0),
+    event.type || "",
+    event.notes || ""
+  ]);
+}
+
+function staffReadSnapshot_(properties, key) {
+  try {
+    return JSON.parse(properties.getProperty(key) || "null");
+  } catch (error) {
+    properties.deleteProperty(key);
+    return null;
+  }
+}
+
+function staffSnapshotKeys_(properties) {
+  return properties.getKeys().filter(function(key) {
+    return key.indexOf(STAFF_SNAPSHOT_PREFIX) === 0 && key !== STAFF_SNAPSHOT_INITIALIZED_KEY;
+  });
+}
+
+function staffStoreSnapshot_(event, suppliedProperties) {
+  if (!event || !event.id) return;
+  const properties = suppliedProperties || PropertiesService.getScriptProperties();
+  properties.setProperty(staffSnapshotKey_(event.id), JSON.stringify(staffSnapshotRecord_(event)));
+  if (!suppliedProperties) staffTrimSnapshots_(properties);
+}
+
+function staffDeleteSnapshot_(id, suppliedProperties) {
+  const properties = suppliedProperties || PropertiesService.getScriptProperties();
+  properties.deleteProperty(staffSnapshotKey_(id));
+}
+
+function staffTrimSnapshots_(properties) {
+  staffSnapshotKeys_(properties)
+    .map(function(key) { return { key: key, value: staffReadSnapshot_(properties, key) }; })
+    .filter(function(item) { return item.value; })
+    .sort(function(a, b) { return Number(b.value.seenAt || 0) - Number(a.value.seenAt || 0); })
+    .slice(STAFF_SNAPSHOT_MAX_ENTRIES)
+    .forEach(function(item) { properties.deleteProperty(item.key); });
+}
+
+function staffReconcileDirectChanges_(events, startDate, endDate) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(2000)) return;
+
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const initializedAt = Number(properties.getProperty(STAFF_SNAPSHOT_INITIALIZED_KEY) || 0);
+    const currentById = {};
+
+    events.forEach(function(event) {
+      currentById[event.id] = true;
+      const key = staffSnapshotKey_(event.id);
+      const previous = staffReadSnapshot_(properties, key);
+      if (previous && staffSnapshotFingerprint_(previous) !== staffSnapshotFingerprint_(event)) {
+        staffWriteAudit_("変更", previous, event, "Googleカレンダー直接操作");
+      } else if (!previous && initializedAt && Number(event.lastUpdated || 0) >= initializedAt) {
+        staffWriteAudit_("作成", null, event, "Googleカレンダー直接操作");
+      }
+      staffStoreSnapshot_(event, properties);
+    });
+
+    if (initializedAt) {
+      staffSnapshotKeys_(properties).forEach(function(key) {
+        const previous = staffReadSnapshot_(properties, key);
+        if (!previous || currentById[previous.id]) return;
+        const previousDate = String(previous.startAt || "").slice(0, 10);
+        if (previousDate < startDate || previousDate > endDate) return;
+
+        const liveEvent = staffCalendar_().getEventById(previous.id);
+        if (!liveEvent) {
+          staffWriteAudit_("削除", previous, null, "Googleカレンダー直接操作");
+          staffDeleteSnapshot_(previous.id, properties);
+          return;
+        }
+
+        const moved = staffSerializeEvent_(liveEvent);
+        if (staffSnapshotFingerprint_(previous) !== staffSnapshotFingerprint_(moved)) {
+          staffWriteAudit_("変更", previous, moved, "Googleカレンダー直接操作");
+        }
+        staffStoreSnapshot_(moved, properties);
+      });
+    } else {
+      properties.setProperty(STAFF_SNAPSHOT_INITIALIZED_KEY, String(Date.now()));
+    }
+
+    staffTrimSnapshots_(properties);
+  } catch (error) {
+    console.error("Googleカレンダー直接操作の確認に失敗しました", error);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function staffAuditKeys_(properties) {

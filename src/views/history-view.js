@@ -23,6 +23,7 @@ function renderEntry(entry) {
       <h2>${escapeHtml(entry.customerName || "名称なし")}</h2>
       <p>${escapeHtml(String(entry.startAt || "").replace("T", " ").slice(0, 16))}〜${escapeHtml(String(entry.endAt || "").slice(11, 16))}</p>
       <div class="history-entry__meta">
+        <span>操作：${escapeHtml(entry.source || "不明")}</span>
         <span>${escapeHtml(entry.trainerName || "指定なし")}</span>
         <span>${escapeHtml(entry.typeName || "予定")}</span>
       </div>

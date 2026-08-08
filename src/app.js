@@ -1,6 +1,13 @@
 import { BOOKING_TYPES, TRAINERS } from "./config.js";
 import { parseRoute, navigate } from "./router.js";
-import { appState, saveLastView } from "./state.js";
+import {
+  OPERATORS,
+  appState,
+  getOperatorProfile,
+  loadOperatorId,
+  saveLastView,
+  saveOperatorId
+} from "./state.js";
 import { createCalendarRepository } from "./services/repository-factory.js";
 import {
   addDays,
@@ -32,6 +39,59 @@ const pwaInstallDialog = document.getElementById("pwaInstallDialog");
 let lastCalendarHash = "";
 let pendingRender = 0;
 let toastTimer = null;
+
+function ensureOperatorDialog() {
+  let dialog = document.getElementById("operatorDialog");
+  if (dialog) return dialog;
+  document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="operator-dialog" id="operatorDialog">
+      <div class="operator-dialog__body">
+        <p class="eyebrow">この端末を設定</p>
+        <h2>操作者を選んでください</h2>
+        <p>予約の担当初期値と操作履歴に使用します。</p>
+        <div class="operator-dialog__choices">
+          ${OPERATORS.map((operator) => `
+            <button type="button" data-operator-choice="${operator.id}">
+              <strong>${operator.name}</strong>
+              <span>${operator.trainerId ? `新規予約の担当：${operator.name}` : "新規予約の担当：指定なし"}</span>
+            </button>
+          `).join("")}
+        </div>
+        <button class="operator-dialog__cancel" type="button" data-operator-cancel>変更しない</button>
+      </div>
+    </dialog>
+  `);
+  return document.getElementById("operatorDialog");
+}
+
+function chooseOperator({ required = false } = {}) {
+  const dialog = ensureOperatorDialog();
+  const cancelButton = dialog.querySelector("[data-operator-cancel]");
+  cancelButton.hidden = required;
+
+  return new Promise((resolve) => {
+    const finish = (operatorId = "") => {
+      dialog.removeEventListener("click", onClick);
+      dialog.removeEventListener("cancel", onCancel);
+      if (operatorId) saveOperatorId(operatorId);
+      if (dialog.open) dialog.close();
+      resolve(operatorId ? getOperatorProfile() : null);
+    };
+    const onClick = (event) => {
+      const choice = event.target.closest("[data-operator-choice]");
+      if (choice) finish(choice.dataset.operatorChoice);
+      if (event.target.closest("[data-operator-cancel]")) finish();
+    };
+    const onCancel = (event) => {
+      event.preventDefault();
+      if (!required) finish();
+    };
+
+    dialog.addEventListener("click", onClick);
+    dialog.addEventListener("cancel", onCancel);
+    dialog.showModal();
+  });
+}
 
 function calendarRouteConfig(route) {
   if (route.name === "month") {
@@ -300,7 +360,10 @@ async function renderRoute({ forceRefresh = false } = {}) {
 
     if (route.name === "booking-new") {
       const date = currentDateForRoute(route);
-      html = renderBookingForm({ defaultDate: toISODate(date) });
+      html = renderBookingForm({
+        defaultDate: toISODate(date),
+        defaultTrainerId: getOperatorProfile()?.trainerId ?? "tamai"
+      });
     }
 
     if (route.name === "booking-edit") {
@@ -374,6 +437,14 @@ async function handleAction(button) {
 
   if (action === "install-app") {
     await installApp();
+  }
+
+  if (action === "change-operator") {
+    const operator = await chooseOperator();
+    if (operator) {
+      await renderRoute();
+      showToast(`この端末を「${operator.name}」に変更しました`);
+    }
   }
 
   if (action === "show-month") {
@@ -554,8 +625,15 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));
 }
 
-if (!window.location.hash) {
-  navigate(`month/${monthRouteValue(new Date())}`, { replace: true });
-} else {
-  renderRoute();
+async function startApp() {
+  if (!loadOperatorId()) await chooseOperator({ required: true });
+  if (!window.location.hash) {
+    navigate(`month/${monthRouteValue(new Date())}`, { replace: true });
+  } else {
+    renderRoute();
+  }
 }
+
+startApp().catch((error) => {
+  app.innerHTML = renderError(escapeHtml(error.message || "アプリを起動できませんでした。"));
+});

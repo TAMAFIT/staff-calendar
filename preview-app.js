@@ -151,6 +151,33 @@
 
   // src/state.js
   var VIEW_STORAGE_KEY = "tamafit_staff_calendar_last_view";
+  var OPERATOR_STORAGE_KEY = "tamafit_staff_calendar_operator_v1";
+  var OPERATORS = [
+    { id: "tamai", name: "\u7389\u4E95", trainerId: "tamai" },
+    { id: "obayashi", name: "\u5927\u6797", trainerId: "obayashi" },
+    { id: "store", name: "\u5E97\u8217\u7528\u7AEF\u672B", trainerId: "" }
+  ];
+  function loadOperatorId() {
+    try {
+      const value = globalThis.localStorage?.getItem(OPERATOR_STORAGE_KEY) || "";
+      return OPERATORS.some((operator) => operator.id === value) ? value : "";
+    } catch {
+      return "";
+    }
+  }
+  function getOperatorProfile() {
+    const id = loadOperatorId();
+    return OPERATORS.find((operator) => operator.id === id) || null;
+  }
+  function saveOperatorId(id) {
+    if (!OPERATORS.some((operator) => operator.id === id)) return false;
+    try {
+      globalThis.localStorage?.setItem(OPERATOR_STORAGE_KEY, id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   function saveLastView(view) {
     if (view !== "month" && view !== "week") return;
     try {
@@ -247,7 +274,7 @@
         method: "POST",
         redirect: "follow",
         // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
-        body: JSON.stringify({ action, ...data })
+        body: JSON.stringify({ action, operatorId: loadOperatorId(), ...data })
       });
       if (!response.ok) throw new Error("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
       return ensureSuccess(await response.json());
@@ -397,7 +424,7 @@
     }
     writeHistory(entries) {
       try {
-        this.storage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 100)));
+        this.storage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 50)));
       } catch {
       }
     }
@@ -407,7 +434,7 @@
       this.writeHistory([{
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         action,
-        source: "\u30ED\u30FC\u30AB\u30EB\u78BA\u8A8D",
+        source: getOperatorProfile()?.name || "\u672A\u8A2D\u5B9A\u7AEF\u672B",
         id: current.id,
         customerName: current.customerName,
         trainerName: current.trainerId === "tamai" ? "\u7389\u4E95" : current.trainerId === "obayashi" ? "\u5927\u6797" : "\u6307\u5B9A\u306A\u3057",
@@ -630,6 +657,7 @@
     showAdd = true,
     isRefreshing = false
   } = {}) {
+    const operator = getOperatorProfile();
     return `
     <div class="app-shell">
       <header class="app-header">
@@ -660,6 +688,13 @@
         </div>
       </header>
       <main class="app-main">${content}</main>
+      <footer class="app-footer">
+        <button class="operator-setting" type="button" data-action="change-operator">
+          <span>\u3053\u306E\u7AEF\u672B\u306E\u64CD\u4F5C\u8005</span>
+          <strong>${operator?.name || "\u672A\u8A2D\u5B9A"}</strong>
+          <small>\u5909\u66F4</small>
+        </button>
+      </footer>
     </div>
   `;
   }
@@ -686,11 +721,11 @@
   }
 
   // src/views/booking-form-view.js
-  function renderBookingForm({ event = null, defaultDate }) {
+  function renderBookingForm({ event = null, defaultDate, defaultTrainerId = "tamai" }) {
     const isEditing = Boolean(event);
     const startParts = event ? dateTimeToParts(event.startAt) : { date: defaultDate, time: "10:00" };
     const type = event?.type || "member";
-    const selectedTrainerId = event ? event.trainerId : "tamai";
+    const selectedTrainerId = event ? event.trainerId : defaultTrainerId;
     const times = createTimeOptions(OPENING_TIME, CLOSING_TIME, TIME_STEP_MINUTES);
     const content = `
     <section class="booking-form-view">
@@ -856,6 +891,7 @@
       <h2>${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</h2>
       <p>${escapeHtml(String(entry.startAt || "").replace("T", " ").slice(0, 16))}\u301C${escapeHtml(String(entry.endAt || "").slice(11, 16))}</p>
       <div class="history-entry__meta">
+        <span>\u64CD\u4F5C\uFF1A${escapeHtml(entry.source || "\u4E0D\u660E")}</span>
         <span>${escapeHtml(entry.trainerName || "\u6307\u5B9A\u306A\u3057")}</span>
         <span>${escapeHtml(entry.typeName || "\u4E88\u5B9A")}</span>
       </div>
@@ -1054,6 +1090,55 @@
   var lastCalendarHash = "";
   var pendingRender = 0;
   var toastTimer = null;
+  function ensureOperatorDialog() {
+    let dialog = document.getElementById("operatorDialog");
+    if (dialog) return dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="operator-dialog" id="operatorDialog">
+      <div class="operator-dialog__body">
+        <p class="eyebrow">\u3053\u306E\u7AEF\u672B\u3092\u8A2D\u5B9A</p>
+        <h2>\u64CD\u4F5C\u8005\u3092\u9078\u3093\u3067\u304F\u3060\u3055\u3044</h2>
+        <p>\u4E88\u7D04\u306E\u62C5\u5F53\u521D\u671F\u5024\u3068\u64CD\u4F5C\u5C65\u6B74\u306B\u4F7F\u7528\u3057\u307E\u3059\u3002</p>
+        <div class="operator-dialog__choices">
+          ${OPERATORS.map((operator) => `
+            <button type="button" data-operator-choice="${operator.id}">
+              <strong>${operator.name}</strong>
+              <span>${operator.trainerId ? `\u65B0\u898F\u4E88\u7D04\u306E\u62C5\u5F53\uFF1A${operator.name}` : "\u65B0\u898F\u4E88\u7D04\u306E\u62C5\u5F53\uFF1A\u6307\u5B9A\u306A\u3057"}</span>
+            </button>
+          `).join("")}
+        </div>
+        <button class="operator-dialog__cancel" type="button" data-operator-cancel>\u5909\u66F4\u3057\u306A\u3044</button>
+      </div>
+    </dialog>
+  `);
+    return document.getElementById("operatorDialog");
+  }
+  function chooseOperator({ required = false } = {}) {
+    const dialog = ensureOperatorDialog();
+    const cancelButton = dialog.querySelector("[data-operator-cancel]");
+    cancelButton.hidden = required;
+    return new Promise((resolve) => {
+      const finish = (operatorId = "") => {
+        dialog.removeEventListener("click", onClick);
+        dialog.removeEventListener("cancel", onCancel);
+        if (operatorId) saveOperatorId(operatorId);
+        if (dialog.open) dialog.close();
+        resolve(operatorId ? getOperatorProfile() : null);
+      };
+      const onClick = (event) => {
+        const choice = event.target.closest("[data-operator-choice]");
+        if (choice) finish(choice.dataset.operatorChoice);
+        if (event.target.closest("[data-operator-cancel]")) finish();
+      };
+      const onCancel = (event) => {
+        event.preventDefault();
+        if (!required) finish();
+      };
+      dialog.addEventListener("click", onClick);
+      dialog.addEventListener("cancel", onCancel);
+      dialog.showModal();
+    });
+  }
   function calendarRouteConfig(route) {
     if (route.name === "month") {
       const anchor = parseMonthRoute(route.month);
@@ -1281,7 +1366,10 @@
       let html = "";
       if (route.name === "booking-new") {
         const date = currentDateForRoute(route);
-        html = renderBookingForm({ defaultDate: toISODate(date) });
+        html = renderBookingForm({
+          defaultDate: toISODate(date),
+          defaultTrainerId: getOperatorProfile()?.trainerId ?? "tamai"
+        });
       }
       if (route.name === "booking-edit") {
         const event = await repository.getEvent(route.id);
@@ -1342,6 +1430,13 @@
     }
     if (action === "install-app") {
       await installApp();
+    }
+    if (action === "change-operator") {
+      const operator = await chooseOperator();
+      if (operator) {
+        await renderRoute();
+        showToast(`\u3053\u306E\u7AEF\u672B\u3092\u300C${operator.name}\u300D\u306B\u5909\u66F4\u3057\u307E\u3057\u305F`);
+      }
     }
     if (action === "show-month") {
       navigate(`month/${monthRouteValue(currentDateForRoute(route))}`);
@@ -1498,9 +1593,15 @@
   if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));
   }
-  if (!window.location.hash) {
-    navigate(`month/${monthRouteValue(/* @__PURE__ */ new Date())}`, { replace: true });
-  } else {
-    renderRoute();
+  async function startApp() {
+    if (!loadOperatorId()) await chooseOperator({ required: true });
+    if (!window.location.hash) {
+      navigate(`month/${monthRouteValue(/* @__PURE__ */ new Date())}`, { replace: true });
+    } else {
+      renderRoute();
+    }
   }
+  startApp().catch((error) => {
+    app.innerHTML = renderError(escapeHtml(error.message || "\u30A2\u30D7\u30EA\u3092\u8D77\u52D5\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002"));
+  });
 })();

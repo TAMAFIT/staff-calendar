@@ -213,6 +213,45 @@ svg {
   min-height: calc(100dvh - 67px - var(--safe-top));
 }
 
+.app-footer {
+  padding: 10px 12px calc(14px + var(--safe-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.operator-setting {
+  display: grid;
+  width: 100%;
+  min-height: 46px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+  text-align: left;
+}
+
+.operator-setting span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.operator-setting strong {
+  display: block;
+  grid-column: 1;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.operator-setting small {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--green-800);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .pwa-install-banner {
   display: flex;
   align-items: center;

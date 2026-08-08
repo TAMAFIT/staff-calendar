@@ -10,11 +10,11 @@ import { createTimeOptions, dateTimeToParts } from "../utils/date.js";
 import { escapeAttribute, escapeHtml } from "../utils/html.js";
 import { renderAppShell } from "./app-shell.js";
 
-export function renderBookingForm({ event = null, defaultDate }) {
+export function renderBookingForm({ event = null, defaultDate, defaultTrainerId = "tamai" }) {
   const isEditing = Boolean(event);
   const startParts = event ? dateTimeToParts(event.startAt) : { date: defaultDate, time: "10:00" };
   const type = event?.type || "member";
-  const selectedTrainerId = event ? event.trainerId : "tamai";
+  const selectedTrainerId = event ? event.trainerId : defaultTrainerId;
   const times = createTimeOptions(OPENING_TIME, CLOSING_TIME, TIME_STEP_MINUTES);
 
   const content = `

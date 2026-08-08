@@ -1,4 +1,5 @@
 import { APP_NAME } from "../config.js";
+import { getOperatorProfile } from "../state.js";
 
 export function renderAppShell(content, {
   title = APP_NAME,
@@ -7,6 +8,7 @@ export function renderAppShell(content, {
   showAdd = true,
   isRefreshing = false
 } = {}) {
+  const operator = getOperatorProfile();
   return `
     <div class="app-shell">
       <header class="app-header">
@@ -37,6 +39,13 @@ export function renderAppShell(content, {
         </div>
       </header>
       <main class="app-main">${content}</main>
+      <footer class="app-footer">
+        <button class="operator-setting" type="button" data-action="change-operator">
+          <span>この端末の操作者</span>
+          <strong>${operator?.name || "未設定"}</strong>
+          <small>変更</small>
+        </button>
+      </footer>
     </div>
   `;
 }

@@ -46,6 +46,7 @@ test("createEvent sends a CORS-simple POST payload to Apps Script", async () => 
   assert.equal(request.options.headers, undefined);
   assert.deepEqual(JSON.parse(request.options.body), {
     action: "staffCalendarCreate",
+    operatorId: "",
     event: { customerName: "テスト 太郎" }
   });
   assert.deepEqual(event, { id: "event-2" });
