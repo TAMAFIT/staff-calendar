@@ -14,7 +14,7 @@ export function renderBookingForm({ event = null, defaultDate }) {
   const isEditing = Boolean(event);
   const startParts = event ? dateTimeToParts(event.startAt) : { date: defaultDate, time: "10:00" };
   const type = event?.type || "member";
-  const isBlocked = type === "blocked";
+  const selectedTrainerId = event ? event.trainerId : "tamai";
   const times = createTimeOptions(OPENING_TIME, CLOSING_TIME, TIME_STEP_MINUTES);
 
   const content = `
@@ -27,16 +27,17 @@ export function renderBookingForm({ event = null, defaultDate }) {
 
       <form class="booking-form" id="bookingForm" data-event-id="${escapeAttribute(event?.id || "")}">
         <div class="field field--full">
-          <label for="customerName">お客様名</label>
-          <input id="customerName" name="customerName" type="text" value="${escapeAttribute(event?.customerName || "")}" placeholder="例：山田 花子" autocomplete="off" ${isBlocked ? "" : "required"}>
-          <small>予定ブロックの場合は、用途を入力できます。</small>
+          <label for="customerName">お客様名・予定名</label>
+          <input id="customerName" name="customerName" type="text" value="${escapeAttribute(event?.customerName || "")}" placeholder="例：山田 花子" autocomplete="off" required>
+          <small>予約ブロック・仮予約枠・イベントでは、用途を入力してください。</small>
         </div>
 
         <div class="field field--full">
           <label for="trainerId">担当トレーナー</label>
           <div class="select-wrap">
-            <select id="trainerId" name="trainerId" required>
-              ${TRAINERS.map((trainer) => `<option value="${trainer.id}" ${event?.trainerId === trainer.id ? "selected" : ""}>${escapeHtml(trainer.name)}</option>`).join("")}
+            <select id="trainerId" name="trainerId">
+              <option value="" ${selectedTrainerId === "" ? "selected" : ""}>指定なし（共通予定）</option>
+              ${TRAINERS.map((trainer) => `<option value="${trainer.id}" ${selectedTrainerId === trainer.id ? "selected" : ""}>${escapeHtml(trainer.name)}</option>`).join("")}
             </select>
           </div>
         </div>

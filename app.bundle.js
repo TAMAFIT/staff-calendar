@@ -9,7 +9,9 @@ var BOOKING_TYPES = [
   { id: "member", name: "\u901A\u5E38\u4E88\u7D04" },
   { id: "trial", name: "\u4F53\u9A13" },
   { id: "consultation", name: "\u898B\u5B66\u30FB\u76F8\u8AC7" },
-  { id: "blocked", name: "\u4E88\u5B9A\u30D6\u30ED\u30C3\u30AF" }
+  { id: "blocked", name: "\u4E88\u7D04\u30D6\u30ED\u30C3\u30AF" },
+  { id: "tentative", name: "\u4EEE\u4E88\u7D04\u67A0" },
+  { id: "event", name: "\u30A4\u30D9\u30F3\u30C8" }
 ];
 var DURATIONS = [30, 60, 90];
 var OPENING_TIME = "09:00";
@@ -131,6 +133,9 @@ function parseRoute(hash = window.location.hash) {
   if (segments[0] === "booking" && segments[1] === "edit" && segments[2]) {
     return { name: "booking-edit", id: decodeURIComponent(segments[2]) };
   }
+  if (segments[0] === "history") {
+    return { name: "history" };
+  }
   return { name: "month", month: monthRouteValue(today) };
 }
 function navigate(path, { replace = false } = {}) {
@@ -179,7 +184,32 @@ var CalendarRepository = class {
   async findConflicts() {
     throw new Error("findConflicts must be implemented");
   }
+  async findBufferWarnings() {
+    throw new Error("findBufferWarnings must be implemented");
+  }
+  async listHistory() {
+    throw new Error("listHistory must be implemented");
+  }
 };
+
+// src/services/booking-proximity.js
+var BOOKING_BUFFER_MINUTES = 30;
+function findBufferWarnings(events, candidate, excludeId = null, bufferMinutes = BOOKING_BUFFER_MINUTES) {
+  if (!candidate.trainerId) return [];
+  const candidateStart = Date.parse(candidate.startAt);
+  const candidateEnd = Date.parse(candidate.endAt);
+  const bufferMs = bufferMinutes * 60 * 1e3;
+  if (!Number.isFinite(candidateStart) || !Number.isFinite(candidateEnd)) return [];
+  return events.filter((event) => {
+    if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
+    const eventStart = Date.parse(event.startAt);
+    const eventEnd = Date.parse(event.endAt);
+    if (!Number.isFinite(eventStart) || !Number.isFinite(eventEnd)) return false;
+    const gapAfterExisting = candidateStart - eventEnd;
+    const gapBeforeExisting = eventStart - candidateEnd;
+    return gapAfterExisting >= 0 && gapAfterExisting < bufferMs || gapBeforeExisting >= 0 && gapBeforeExisting < bufferMs;
+  });
+}
 
 // src/services/google-calendar-repository.js
 function isConfigured(url) {
@@ -241,12 +271,21 @@ var GoogleCalendarRepository = class extends CalendarRepository {
     await this.post("staffCalendarDelete", { id });
   }
   async findConflicts(candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
     const date = candidate.startAt.slice(0, 10);
     const events = await this.listEvents(date, date);
     return events.filter((event) => {
       if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
       return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
     });
+  }
+  async findBufferWarnings(candidate, excludeId = null) {
+    const date = candidate.startAt.slice(0, 10);
+    return findBufferWarnings(await this.listEvents(date, date), candidate, excludeId);
+  }
+  async listHistory(limit = 100) {
+    const response = await this.get("staffCalendarHistory", { limit });
+    return response.entries || [];
   }
 };
 
@@ -321,6 +360,7 @@ function getBookingType(typeId) {
 
 // src/services/local-calendar-repository.js
 var STORAGE_KEY = "tamafit_staff_calendar_events_v1";
+var HISTORY_STORAGE_KEY = "tamafit_staff_calendar_history_v1";
 function makeId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `booking-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -346,6 +386,37 @@ var LocalCalendarRepository = class extends CalendarRepository {
     } catch {
     }
   }
+  readHistory() {
+    try {
+      const saved = JSON.parse(this.storage.getItem(HISTORY_STORAGE_KEY) || "[]");
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
+    }
+  }
+  writeHistory(entries) {
+    try {
+      this.storage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, 100)));
+    } catch {
+    }
+  }
+  addHistory(action, before, after) {
+    const current = after || before;
+    if (!current) return;
+    this.writeHistory([{
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      action,
+      source: "\u30ED\u30FC\u30AB\u30EB\u78BA\u8A8D",
+      id: current.id,
+      customerName: current.customerName,
+      trainerName: current.trainerId === "tamai" ? "\u7389\u4E95" : current.trainerId === "obayashi" ? "\u5927\u6797" : "\u6307\u5B9A\u306A\u3057",
+      startAt: current.startAt,
+      endAt: current.endAt,
+      typeName: { member: "\u901A\u5E38\u4E88\u7D04", trial: "\u4F53\u9A13", consultation: "\u898B\u5B66\u30FB\u76F8\u8AC7", blocked: "\u4E88\u7D04\u30D6\u30ED\u30C3\u30AF", tentative: "\u4EEE\u4E88\u7D04\u67A0", event: "\u30A4\u30D9\u30F3\u30C8" }[current.type] || current.type,
+      notes: current.notes || "",
+      beforeSummary: before && after ? `${before.startAt}\u301C${before.endAt} / ${before.customerName}` : ""
+    }, ...this.readHistory()]);
+  }
   async listEvents(startDate, endDate) {
     return this.readAll().filter((event) => event.startAt.slice(0, 10) >= startDate && event.startAt.slice(0, 10) <= endDate).sort((a, b) => a.startAt.localeCompare(b.startAt));
   }
@@ -365,27 +436,39 @@ var LocalCalendarRepository = class extends CalendarRepository {
     const events = this.readAll();
     events.push(event);
     this.writeAll(events);
+    this.addHistory("\u4F5C\u6210", null, event);
     return event;
   }
   async updateEvent(id, input) {
     const events = this.readAll();
     const index = events.findIndex((event) => event.id === id);
     if (index < 0) throw new Error("\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+    const before = { ...events[index] };
     events[index] = { ...events[index], ...input, id, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
     this.writeAll(events);
+    this.addHistory("\u5909\u66F4", before, events[index]);
     return events[index];
   }
   async deleteEvent(id) {
     const events = this.readAll();
+    const deleted = events.find((event) => event.id === id);
     const next = events.filter((event) => event.id !== id);
     if (next.length === events.length) throw new Error("\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
     this.writeAll(next);
+    this.addHistory("\u524A\u9664", deleted, null);
   }
   async findConflicts(candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
     return this.readAll().filter((event) => {
       if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
       return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
     });
+  }
+  async findBufferWarnings(candidate, excludeId = null) {
+    return findBufferWarnings(this.readAll(), candidate, excludeId);
+  }
+  async listHistory(limit = 100) {
+    return this.readHistory().slice(0, limit);
   }
   async resetDemoData() {
     const seeded = createMockEvents();
@@ -501,12 +584,20 @@ var CachedCalendarRepository = class extends CalendarRepository {
     this.invalidate();
   }
   async findConflicts(candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
     const date = candidate.startAt.slice(0, 10);
     const events = await this.refreshEvents(date, date);
     return events.filter((event) => {
       if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
       return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
     });
+  }
+  async findBufferWarnings(candidate, excludeId = null) {
+    const date = candidate.startAt.slice(0, 10);
+    return findBufferWarnings(await this.refreshEvents(date, date), candidate, excludeId);
+  }
+  async listHistory(limit = 100) {
+    return this.source.listHistory(limit);
   }
 };
 
@@ -598,7 +689,7 @@ function renderBookingForm({ event = null, defaultDate }) {
   const isEditing = Boolean(event);
   const startParts = event ? dateTimeToParts(event.startAt) : { date: defaultDate, time: "10:00" };
   const type = event?.type || "member";
-  const isBlocked = type === "blocked";
+  const selectedTrainerId = event ? event.trainerId : "tamai";
   const times = createTimeOptions(OPENING_TIME, CLOSING_TIME, TIME_STEP_MINUTES);
   const content = `
     <section class="booking-form-view">
@@ -610,16 +701,17 @@ function renderBookingForm({ event = null, defaultDate }) {
 
       <form class="booking-form" id="bookingForm" data-event-id="${escapeAttribute(event?.id || "")}">
         <div class="field field--full">
-          <label for="customerName">\u304A\u5BA2\u69D8\u540D</label>
-          <input id="customerName" name="customerName" type="text" value="${escapeAttribute(event?.customerName || "")}" placeholder="\u4F8B\uFF1A\u5C71\u7530 \u82B1\u5B50" autocomplete="off" ${isBlocked ? "" : "required"}>
-          <small>\u4E88\u5B9A\u30D6\u30ED\u30C3\u30AF\u306E\u5834\u5408\u306F\u3001\u7528\u9014\u3092\u5165\u529B\u3067\u304D\u307E\u3059\u3002</small>
+          <label for="customerName">\u304A\u5BA2\u69D8\u540D\u30FB\u4E88\u5B9A\u540D</label>
+          <input id="customerName" name="customerName" type="text" value="${escapeAttribute(event?.customerName || "")}" placeholder="\u4F8B\uFF1A\u5C71\u7530 \u82B1\u5B50" autocomplete="off" required>
+          <small>\u4E88\u7D04\u30D6\u30ED\u30C3\u30AF\u30FB\u4EEE\u4E88\u7D04\u67A0\u30FB\u30A4\u30D9\u30F3\u30C8\u3067\u306F\u3001\u7528\u9014\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002</small>
         </div>
 
         <div class="field field--full">
           <label for="trainerId">\u62C5\u5F53\u30C8\u30EC\u30FC\u30CA\u30FC</label>
           <div class="select-wrap">
-            <select id="trainerId" name="trainerId" required>
-              ${TRAINERS.map((trainer) => `<option value="${trainer.id}" ${event?.trainerId === trainer.id ? "selected" : ""}>${escapeHtml(trainer.name)}</option>`).join("")}
+            <select id="trainerId" name="trainerId">
+              <option value="" ${selectedTrainerId === "" ? "selected" : ""}>\u6307\u5B9A\u306A\u3057\uFF08\u5171\u901A\u4E88\u5B9A\uFF09</option>
+              ${TRAINERS.map((trainer) => `<option value="${trainer.id}" ${selectedTrainerId === trainer.id ? "selected" : ""}>${escapeHtml(trainer.name)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -682,6 +774,7 @@ function renderBookingForm({ event = null, defaultDate }) {
 function renderDayEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
   const type = getBookingType(event.type);
+  const isCustomerReservation = ["member", "trial", "consultation"].includes(event.type);
   const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
   return `
     <button class="day-event day-event--${color}" type="button" data-action="edit-booking" data-id="${event.id}">
@@ -692,10 +785,10 @@ function renderDayEvent(event) {
       <span class="day-event__line" aria-hidden="true"></span>
       <span class="day-event__content">
         <span class="day-event__badges">
-          <small>${escapeHtml(trainer?.name || "\u62C5\u5F53\u672A\u5B9A")}</small>
+          <small>${escapeHtml(trainer?.name || "\u6307\u5B9A\u306A\u3057")}</small>
           <small>${escapeHtml(type.name)}</small>
         </span>
-        <strong>${escapeHtml(event.type === "blocked" ? type.name : `${event.customerName} \u69D8`)}</strong>
+        <strong>${escapeHtml(isCustomerReservation ? `${event.customerName} \u69D8` : event.customerName)}</strong>
         <span>${event.duration}\u5206${event.notes ? `\u30FB${escapeHtml(event.notes)}` : ""}</span>
       </span>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -727,6 +820,10 @@ function renderDayView(date, events, { isRefreshing = false } = {}) {
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         \u3053\u306E\u65E5\u306B\u4E88\u7D04\u3092\u8FFD\u52A0
       </button>
+      <button class="history-link" type="button" data-action="open-history">
+        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
+        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
+      </button>
     </section>
   `;
   return renderAppShell(content, {
@@ -735,6 +832,60 @@ function renderDayView(date, events, { isRefreshing = false } = {}) {
     backAction: "back-to-calendar",
     showAdd: false,
     isRefreshing
+  });
+}
+
+// src/views/history-view.js
+function actionLabel(action) {
+  return { "\u4F5C\u6210": "\u4E88\u7D04\u3092\u8FFD\u52A0", "\u5909\u66F4": "\u4E88\u7D04\u3092\u5909\u66F4", "\u524A\u9664": "\u4E88\u7D04\u3092\u524A\u9664" }[action] || action;
+}
+function actionClass(action) {
+  return { "\u4F5C\u6210": "create", "\u5909\u66F4": "update", "\u524A\u9664": "delete" }[action] || "other";
+}
+function formatTimestamp(value) {
+  return String(value || "").replace("T", " ").replace(/\.\d+Z$/, "");
+}
+function renderEntry(entry) {
+  return `
+    <article class="history-entry history-entry--${actionClass(entry.action)}">
+      <div class="history-entry__topline">
+        <strong>${escapeHtml(actionLabel(entry.action))}</strong>
+        <time>${escapeHtml(formatTimestamp(entry.timestamp))}</time>
+      </div>
+      <h2>${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</h2>
+      <p>${escapeHtml(String(entry.startAt || "").replace("T", " ").slice(0, 16))}\u301C${escapeHtml(String(entry.endAt || "").slice(11, 16))}</p>
+      <div class="history-entry__meta">
+        <span>${escapeHtml(entry.trainerName || "\u6307\u5B9A\u306A\u3057")}</span>
+        <span>${escapeHtml(entry.typeName || "\u4E88\u5B9A")}</span>
+      </div>
+      ${entry.beforeSummary ? `<p class="history-entry__before">\u5909\u66F4\u524D\uFF1A${escapeHtml(entry.beforeSummary)}</p>` : ""}
+    </article>
+  `;
+}
+function renderHistoryView(entries) {
+  const content = `
+    <section class="history-view">
+      <div class="history-heading">
+        <p class="eyebrow">\u4F5C\u6210\u30FB\u5909\u66F4\u30FB\u524A\u9664</p>
+        <h1>\u64CD\u4F5C\u5C65\u6B74</h1>
+        <p>\u6700\u65B0100\u4EF6\u3092\u65B0\u3057\u3044\u9806\u306B\u8868\u793A\u3057\u307E\u3059\u3002</p>
+      </div>
+      <div class="history-list">
+        ${entries.length ? entries.map(renderEntry).join("") : `
+          <div class="empty-day">
+            <span aria-hidden="true">i</span>
+            <h2>\u64CD\u4F5C\u5C65\u6B74\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093</h2>
+            <p>\u4E88\u7D04\u3092\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u3059\u308B\u3068\u3001\u3053\u3053\u306B\u8A18\u9332\u3055\u308C\u307E\u3059\u3002</p>
+          </div>
+        `}
+      </div>
+    </section>
+  `;
+  return renderAppShell(content, {
+    title: "\u64CD\u4F5C\u5C65\u6B74",
+    subtitle: "\u30B9\u30BF\u30C3\u30D5\u30AB\u30EC\u30F3\u30C0\u30FC",
+    backAction: "back-to-calendar",
+    showAdd: false
   });
 }
 
@@ -749,9 +900,8 @@ function groupEvents(events) {
 }
 function renderEventChip(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-  const type = getBookingType(event.type);
   const time = event.startAt.slice(11, 16);
-  const displayName = event.type === "blocked" ? type.name : event.customerName.split(/[ 　]/)[0];
+  const displayName = Array.from(event.customerName.split(/[ 　]/)[0]).slice(0, 2).join("");
   const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
   return `
     <span class="month-event month-event--${color}" title="${escapeAttribute(`${time} ${event.customerName}`)}">
@@ -814,6 +964,10 @@ function renderMonthView(anchorDate, events, { isRefreshing = false } = {}) {
         ${TRAINERS.map((trainer) => `<span><i class="legend-dot legend-dot--${trainer.color}"></i>${escapeHtml(trainer.name)}</span>`).join("")}
         <span><i class="legend-dot legend-dot--amber"></i>\u4F53\u9A13</span>
       </div>
+      <button class="history-link" type="button" data-action="open-history">
+        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
+        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
+      </button>
     </section>
   `;
   return renderAppShell(content, { isRefreshing });
@@ -830,14 +984,13 @@ function groupEvents2(events) {
 }
 function renderWeekEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-  const type = getBookingType(event.type);
   const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
   return `
     <div class="week-event week-event--${color}">
       <time>${event.startAt.slice(11, 16)}</time>
       <span class="week-event__main">
-        <strong>${escapeHtml(event.type === "blocked" ? type.name : event.customerName)}</strong>
-        <small>${escapeHtml(trainer?.name || "\u62C5\u5F53\u672A\u5B9A")}\u30FB${event.duration}\u5206</small>
+        <strong>${escapeHtml(event.customerName)}</strong>
+        <small>${escapeHtml(trainer?.name || "\u6307\u5B9A\u306A\u3057")}\u30FB${event.duration}\u5206</small>
       </span>
     </div>
   `;
@@ -882,6 +1035,10 @@ function renderWeekView(anchorDate, events, { isRefreshing = false } = {}) {
       </div>
 
       <div class="week-list">${dayRows}</div>
+      <button class="history-link" type="button" data-action="open-history">
+        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
+        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
+      </button>
     </section>
   `;
   return renderAppShell(content, { isRefreshing });
@@ -983,11 +1140,41 @@ function rememberReturnLocation() {
 function getReturnLocation(fallbackDate = /* @__PURE__ */ new Date()) {
   return sessionStorage.getItem("tamafit_calendar_return_hash") || lastCalendarHash || `#/month/${monthRouteValue(fallbackDate)}`;
 }
-function showToast(message) {
+function showToast(message, { duration = 2800, actionLabel: actionLabel2 = "", onAction = null } = {}) {
   clearTimeout(toastTimer);
-  toast.textContent = message;
+  toast.replaceChildren();
+  const text = document.createElement("span");
+  text.textContent = message;
+  toast.append(text);
+  if (actionLabel2 && onAction) {
+    const actionButton = document.createElement("button");
+    actionButton.className = "toast__action";
+    actionButton.type = "button";
+    actionButton.textContent = actionLabel2;
+    actionButton.addEventListener("click", async () => {
+      clearTimeout(toastTimer);
+      actionButton.disabled = true;
+      try {
+        await onAction();
+      } catch (error) {
+        showToast(error.message || "\u5143\u306B\u623B\u305B\u307E\u305B\u3093\u3067\u3057\u305F");
+      }
+    }, { once: true });
+    toast.append(actionButton);
+  }
   toast.classList.add("is-visible");
-  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
+  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), duration);
+}
+function reservationInputFromEvent(event) {
+  return {
+    customerName: event.customerName,
+    trainerId: event.trainerId,
+    startAt: event.startAt,
+    endAt: event.endAt,
+    duration: event.duration,
+    type: event.type,
+    notes: event.notes || ""
+  };
 }
 function showFormMessage(message) {
   const element = document.getElementById("formMessage");
@@ -1100,6 +1287,9 @@ async function renderRoute({ forceRefresh = false } = {}) {
       if (!event) throw new Error("\u7DE8\u96C6\u3059\u308B\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
       html = renderBookingForm({ event, defaultDate: event.startAt.slice(0, 10) });
     }
+    if (route.name === "history") {
+      html = renderHistoryView(await repository.listHistory());
+    }
     if (renderId === pendingRender) {
       app.innerHTML = html;
       syncInstallBanner();
@@ -1116,9 +1306,9 @@ function syncBookingTypeField() {
   const typeSelect = document.getElementById("bookingType");
   const nameInput = document.getElementById("customerName");
   if (!typeSelect || !nameInput) return;
-  const isBlocked = typeSelect.value === "blocked";
-  nameInput.required = !isBlocked;
-  nameInput.placeholder = isBlocked ? "\u4F8B\uFF1A\u6E05\u6383\u30FB\u6253\u3061\u5408\u308F\u305B" : "\u4F8B\uFF1A\u5C71\u7530 \u82B1\u5B50";
+  const isSchedule = ["blocked", "tentative", "event"].includes(typeSelect.value);
+  nameInput.required = true;
+  nameInput.placeholder = isSchedule ? "\u4F8B\uFF1A\u6E05\u6383\u30FB\u6253\u3061\u5408\u308F\u305B" : "\u4F8B\uFF1A\u5C71\u7530 \u82B1\u5B50";
 }
 function bookingDateFromContext(button) {
   if (button?.dataset.date && isValidISODate(button.dataset.date)) return button.dataset.date;
@@ -1173,6 +1363,10 @@ async function handleAction(button) {
   if (action === "back-to-calendar") {
     navigate((lastCalendarHash || `#/month/${monthRouteValue(currentDateForRoute(route))}`).replace(/^#\//, ""));
   }
+  if (action === "open-history") {
+    rememberReturnLocation();
+    navigate("history");
+  }
   if (action === "back-from-form") {
     navigate(getReturnLocation().replace(/^#\//, ""));
   }
@@ -1196,8 +1390,16 @@ async function handleAction(button) {
     });
     if (!confirmed) return;
     await repository.deleteEvent(event.id);
-    showToast("\u4E88\u7D04\u3092\u524A\u9664\u3057\u307E\u3057\u305F");
     navigate(`day/${event.startAt.slice(0, 10)}`);
+    showToast("\u4E88\u7D04\u3092\u524A\u9664\u3057\u307E\u3057\u305F", {
+      duration: 8e3,
+      actionLabel: "\u5143\u306B\u623B\u3059",
+      onAction: async () => {
+        await repository.createEvent(reservationInputFromEvent(event));
+        navigate(`day/${event.startAt.slice(0, 10)}`);
+        showToast("\u4E88\u7D04\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F");
+      }
+    });
   }
 }
 async function handleBookingSubmit(form) {
@@ -1208,7 +1410,7 @@ async function handleBookingSubmit(form) {
   const time = formData.get("time");
   const duration = Number(formData.get("duration"));
   const type = formData.get("type");
-  const customerName = String(formData.get("customerName") || "").trim() || (type === "blocked" ? "\u4E88\u5B9A\u30D6\u30ED\u30C3\u30AF" : "");
+  const customerName = String(formData.get("customerName") || "").trim();
   const startAt = combineDateAndTime(date, time);
   const input = {
     customerName,
@@ -1220,7 +1422,7 @@ async function handleBookingSubmit(form) {
     notes: String(formData.get("notes") || "").trim()
   };
   if (!customerName) {
-    showFormMessage("\u304A\u5BA2\u69D8\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    showFormMessage("\u304A\u5BA2\u69D8\u540D\u307E\u305F\u306F\u4E88\u5B9A\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
     return;
   }
   const conflicts = await repository.findConflicts(input, eventId);
@@ -1229,6 +1431,16 @@ async function handleBookingSubmit(form) {
     showFormMessage(`\u540C\u3058\u62C5\u5F53\u8005\u306B ${conflict.startAt.slice(11, 16)}\u301C${conflict.endAt.slice(11, 16)} \u306E\u4E88\u7D04\u304C\u3042\u308A\u307E\u3059\u3002\u6642\u9593\u3092\u5909\u66F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002`);
     return;
   }
+  const bufferWarnings = await repository.findBufferWarnings(input, eventId);
+  const bufferWarningSummary = bufferWarnings.length ? `
+    <div class="booking-buffer-warning" role="note">
+      <strong>\u524D\u5F8C30\u5206\u306E\u78BA\u8A8D</strong>
+      <p>\u540C\u3058\u62C5\u5F53\u8005\u306E\u4E88\u7D04\u306830\u5206\u672A\u6E80\u306E\u9593\u9694\u3067\u3059\u3002\u6E96\u5099\u30FB\u79FB\u52D5\u6642\u9593\u3092\u78BA\u8A8D\u3057\u3001\u554F\u984C\u306A\u3051\u308C\u3070\u3053\u306E\u307E\u307E\u767B\u9332\u3057\u3066\u304F\u3060\u3055\u3044\u3002</p>
+      <ul>
+        ${bufferWarnings.map((event) => `<li>${escapeHtml(event.startAt.slice(11, 16))}\u301C${escapeHtml(event.endAt.slice(11, 16))}</li>`).join("")}
+      </ul>
+    </div>
+  ` : "";
   const trainer = TRAINERS.find((item) => item.id === input.trainerId);
   const bookingType = BOOKING_TYPES.find((item) => item.id === input.type);
   const confirmed = await askForConfirmation({
@@ -1237,9 +1449,10 @@ async function handleBookingSubmit(form) {
       <dl>
         <div><dt>\u304A\u5BA2\u69D8</dt><dd>${escapeHtml(input.customerName)}</dd></div>
         <div><dt>\u65E5\u6642</dt><dd>${escapeHtml(formatDayTitle(parseISODate(date)))}<br>${escapeHtml(time)}\u301C${escapeHtml(input.endAt.slice(11, 16))}</dd></div>
-        <div><dt>\u62C5\u5F53</dt><dd>${escapeHtml(trainer?.name || "\u62C5\u5F53\u672A\u5B9A")}</dd></div>
+        <div><dt>\u62C5\u5F53</dt><dd>${escapeHtml(trainer?.name || "\u6307\u5B9A\u306A\u3057")}</dd></div>
         <div><dt>\u7A2E\u985E</dt><dd>${escapeHtml(bookingType?.name || "\u901A\u5E38\u4E88\u7D04")}</dd></div>
       </dl>
+      ${bufferWarningSummary}
     `,
     confirmLabel: eventId ? "\u5909\u66F4\u3092\u4FDD\u5B58" : "\u4E88\u7D04\u3092\u767B\u9332"
   });

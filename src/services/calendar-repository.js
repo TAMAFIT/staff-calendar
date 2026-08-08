@@ -22,4 +22,12 @@ export class CalendarRepository {
   async findConflicts() {
     throw new Error("findConflicts must be implemented");
   }
+
+  async findBufferWarnings() {
+    throw new Error("findBufferWarnings must be implemented");
+  }
+
+  async listHistory() {
+    throw new Error("listHistory must be implemented");
+  }
 }

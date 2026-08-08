@@ -60,3 +60,19 @@ test("an API error becomes a readable application error", async () => {
   await assert.rejects(() => repository.getEvent("missing"), /予約が見つかりませんでした/);
 });
 
+test("listHistory requests the latest audit entries", async () => {
+  let requestUrl = "";
+  const repository = new GoogleCalendarRepository({
+    endpoint,
+    fetchImpl: async (url) => {
+      requestUrl = String(url);
+      return jsonResponse({ status: "success", entries: [{ action: "作成" }] });
+    }
+  });
+
+  assert.deepEqual(await repository.listHistory(25), [{ action: "作成" }]);
+  const url = new URL(requestUrl);
+  assert.equal(url.searchParams.get("action"), "staffCalendarHistory");
+  assert.equal(url.searchParams.get("limit"), "25");
+});
+

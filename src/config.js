@@ -13,7 +13,9 @@ export const BOOKING_TYPES = [
   { id: "member", name: "通常予約" },
   { id: "trial", name: "体験" },
   { id: "consultation", name: "見学・相談" },
-  { id: "blocked", name: "予定ブロック" }
+  { id: "blocked", name: "予約ブロック" },
+  { id: "tentative", name: "仮予約枠" },
+  { id: "event", name: "イベント" }
 ];
 
 export const DURATIONS = [30, 60, 90];

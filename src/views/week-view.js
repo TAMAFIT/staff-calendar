@@ -1,7 +1,6 @@
 import { TRAINERS } from "../config.js";
 import { formatShortDay, formatWeekRange, getWeekDays, isToday, toISODate } from "../utils/date.js";
 import { escapeHtml } from "../utils/html.js";
-import { getBookingType } from "../data/mock-calendar.js";
 import { renderAppShell } from "./app-shell.js";
 
 function groupEvents(events) {
@@ -15,14 +14,13 @@ function groupEvents(events) {
 
 function renderWeekEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-  const type = getBookingType(event.type);
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
   return `
     <div class="week-event week-event--${color}">
       <time>${event.startAt.slice(11, 16)}</time>
       <span class="week-event__main">
-        <strong>${escapeHtml(event.type === "blocked" ? type.name : event.customerName)}</strong>
-        <small>${escapeHtml(trainer?.name || "担当未定")}・${event.duration}分</small>
+        <strong>${escapeHtml(event.customerName)}</strong>
+        <small>${escapeHtml(trainer?.name || "指定なし")}・${event.duration}分</small>
       </span>
     </div>
   `;
@@ -69,6 +67,10 @@ export function renderWeekView(anchorDate, events, { isRefreshing = false } = {}
       </div>
 
       <div class="week-list">${dayRows}</div>
+      <button class="history-link" type="button" data-action="open-history">
+        操作履歴をみる
+        <span>追加・変更・削除の記録</span>
+      </button>
     </section>
   `;
   return renderAppShell(content, { isRefreshing });

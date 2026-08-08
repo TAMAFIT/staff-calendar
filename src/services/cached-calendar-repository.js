@@ -1,4 +1,5 @@
 import { CalendarRepository } from "./calendar-repository.js";
+import { findBufferWarnings } from "./booking-proximity.js";
 
 const CACHE_TTL_MS = 20_000;
 const MAX_SNAPSHOTS = 4;
@@ -134,11 +135,21 @@ export class CachedCalendarRepository extends CalendarRepository {
   }
 
   async findConflicts(candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
     const date = candidate.startAt.slice(0, 10);
     const events = await this.refreshEvents(date, date);
     return events.filter((event) => {
       if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
       return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
     });
+  }
+
+  async findBufferWarnings(candidate, excludeId = null) {
+    const date = candidate.startAt.slice(0, 10);
+    return findBufferWarnings(await this.refreshEvents(date, date), candidate, excludeId);
+  }
+
+  async listHistory(limit = 100) {
+    return this.source.listHistory(limit);
   }
 }

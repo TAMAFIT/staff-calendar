@@ -27,6 +27,10 @@ export function parseRoute(hash = window.location.hash) {
     return { name: "booking-edit", id: decodeURIComponent(segments[2]) };
   }
 
+  if (segments[0] === "history") {
+    return { name: "history" };
+  }
+
   return { name: "month", month: monthRouteValue(today) };
 }
 

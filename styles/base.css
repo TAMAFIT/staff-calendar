@@ -374,7 +374,9 @@ svg {
   z-index: 80;
   left: 50%;
   bottom: calc(24px + var(--safe-bottom));
-  max-width: calc(100vw - 40px);
+  display: flex;
+  max-width: calc(100vw - 32px);
+  align-items: center;
   padding: 12px 18px;
   border-radius: 999px;
   background: var(--green-950);
@@ -389,7 +391,24 @@ svg {
 
 .toast.is-visible {
   opacity: 1;
+  pointer-events: auto;
   transform: translate(-50%, 0);
+}
+
+.toast__action {
+  min-height: 32px;
+  margin: -6px -10px -6px 2px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--green-900);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.toast__action:disabled {
+  opacity: 0.55;
 }
 
 :focus-visible {

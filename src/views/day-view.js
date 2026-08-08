@@ -7,6 +7,7 @@ import { renderAppShell } from "./app-shell.js";
 function renderDayEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
   const type = getBookingType(event.type);
+  const isCustomerReservation = ["member", "trial", "consultation"].includes(event.type);
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
   return `
     <button class="day-event day-event--${color}" type="button" data-action="edit-booking" data-id="${event.id}">
@@ -17,10 +18,10 @@ function renderDayEvent(event) {
       <span class="day-event__line" aria-hidden="true"></span>
       <span class="day-event__content">
         <span class="day-event__badges">
-          <small>${escapeHtml(trainer?.name || "担当未定")}</small>
+          <small>${escapeHtml(trainer?.name || "指定なし")}</small>
           <small>${escapeHtml(type.name)}</small>
         </span>
-        <strong>${escapeHtml(event.type === "blocked" ? type.name : `${event.customerName} 様`)}</strong>
+        <strong>${escapeHtml(isCustomerReservation ? `${event.customerName} 様` : event.customerName)}</strong>
         <span>${event.duration}分${event.notes ? `・${escapeHtml(event.notes)}` : ""}</span>
       </span>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -52,6 +53,10 @@ export function renderDayView(date, events, { isRefreshing = false } = {}) {
       <button class="button button--primary button--wide day-add-button" type="button" data-action="new-booking" data-date="${toISODate(date)}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         この日に予約を追加
+      </button>
+      <button class="history-link" type="button" data-action="open-history">
+        操作履歴をみる
+        <span>追加・変更・削除の記録</span>
       </button>
     </section>
   `;

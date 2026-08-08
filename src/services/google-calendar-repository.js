@@ -1,5 +1,6 @@
 import { GOOGLE_APPS_SCRIPT_URL } from "../config.js";
 import { CalendarRepository } from "./calendar-repository.js";
+import { findBufferWarnings } from "./booking-proximity.js";
 
 function isConfigured(url) {
   return /^https:\/\/script\.google\.com\/macros\/s\//.test(String(url || ""));
@@ -72,11 +73,22 @@ export class GoogleCalendarRepository extends CalendarRepository {
   }
 
   async findConflicts(candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
     const date = candidate.startAt.slice(0, 10);
     const events = await this.listEvents(date, date);
     return events.filter((event) => {
       if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
       return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
     });
+  }
+
+  async findBufferWarnings(candidate, excludeId = null) {
+    const date = candidate.startAt.slice(0, 10);
+    return findBufferWarnings(await this.listEvents(date, date), candidate, excludeId);
+  }
+
+  async listHistory(limit = 100) {
+    const response = await this.get("staffCalendarHistory", { limit });
+    return response.entries || [];
   }
 }

@@ -17,6 +17,8 @@ const STAFF_TIMEZONE = "Asia/Tokyo";
 const STAFF_META_MARKER = "\n[TAMAFIT_STAFF_CALENDAR]\n";
 const STAFF_LIST_CACHE_SECONDS = 20;
 const STAFF_CACHE_VERSION_KEY = "tamafit_staff_calendar_cache_version";
+const STAFF_AUDIT_SPREADSHEET_KEY = "tamafit_staff_calendar_audit_spreadsheet_id";
+const STAFF_AUDIT_SHEET_NAME = "操作履歴";
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -25,7 +27,9 @@ const STAFF_TYPES = {
   member: "通常予約",
   trial: "体験",
   consultation: "見学・相談",
-  blocked: "予定ブロック"
+  blocked: "予約ブロック",
+  tentative: "仮予約枠",
+  event: "イベント"
 };
 
 function doGet(e) {
@@ -43,6 +47,10 @@ function doGet(e) {
     if (action === "staffCalendarGet") {
       const event = staffGetEvent_(params.id);
       return staffResponse_({ status: "success", event: event });
+    }
+
+    if (action === "staffCalendarHistory") {
+      return staffResponse_({ status: "success", entries: staffListAudit_(params.limit) });
     }
 
     return staffResponse_({ status: "error", message: "未対応の操作です。" });
@@ -127,29 +135,36 @@ function staffCreateEvent_(input) {
     staffParseDateTime_(reservation.endAt)
   );
   staffWriteMetadata_(event, reservation);
+  const created = staffSerializeEvent_(event);
+  staffWriteAudit_("作成", null, created);
   staffBumpCacheVersion_();
-  return staffSerializeEvent_(event);
+  return created;
 }
 
 function staffUpdateEvent_(id, input) {
   if (!id) throw new Error("予約IDがありません。");
   const event = staffCalendar_().getEventById(String(id));
   if (!event) throw new Error("予約が見つかりませんでした。");
+  const before = staffSerializeEvent_(event);
 
   const reservation = staffNormalizeInput_(input);
   staffEnsureNoConflict_(reservation, event.getId());
   event.setTitle(staffTitle_(reservation));
   event.setTime(staffParseDateTime_(reservation.startAt), staffParseDateTime_(reservation.endAt));
   staffWriteMetadata_(event, reservation);
+  const updated = staffSerializeEvent_(event);
+  staffWriteAudit_("変更", before, updated);
   staffBumpCacheVersion_();
-  return staffSerializeEvent_(event);
+  return updated;
 }
 
 function staffDeleteEvent_(id) {
   if (!id) throw new Error("予約IDがありません。");
   const event = staffCalendar_().getEventById(String(id));
   if (!event) throw new Error("予約が見つかりませんでした。");
+  const deleted = staffSerializeEvent_(event);
   event.deleteEvent();
+  staffWriteAudit_("削除", deleted, null);
   staffBumpCacheVersion_();
 }
 
@@ -163,7 +178,7 @@ function staffNormalizeInput_(input) {
   const notes = String(raw.notes || "").trim();
   const duration = Number(raw.duration || 0);
 
-  if (!STAFF_TRAINERS[trainerId]) throw new Error("担当トレーナーを選択してください。");
+  if (trainerId && !STAFF_TRAINERS[trainerId]) throw new Error("担当トレーナーを確認してください。");
   if (!STAFF_TYPES[type]) throw new Error("予約種類を確認してください。");
   if (!customerName) throw new Error("お客様名または予定名を入力してください。");
   if (![30, 60, 90].includes(duration)) throw new Error("所要時間を確認してください。");
@@ -185,6 +200,7 @@ function staffNormalizeInput_(input) {
 }
 
 function staffEnsureNoConflict_(reservation, excludedEventId) {
+  if (!reservation.trainerId) return;
   const start = staffParseDateTime_(reservation.startAt);
   const end = staffParseDateTime_(reservation.endAt);
   const dayStart = staffDayStart_(reservation.startAt.slice(0, 10));
@@ -215,7 +231,7 @@ function staffSerializeEvent_(event) {
     endAt: staffFormatDateTime_(event.getEndTime()),
     duration: Math.round((event.getEndTime().getTime() - event.getStartTime().getTime()) / 60000),
     type: type,
-    notes: metadata.notes || "",
+    notes: metadata.notes || staffPlainDescription_(event.getDescription()),
     status: "confirmed",
     source: "google-calendar",
     isManaged: Boolean(metadata.version)
@@ -244,14 +260,31 @@ function staffReadMetadata_(description) {
   }
 }
 
+function staffPlainDescription_(description) {
+  const value = String(description || "");
+  const markerIndex = value.lastIndexOf(STAFF_META_MARKER);
+  return (markerIndex < 0 ? value : value.slice(0, markerIndex)).trim();
+}
+
 function staffTitle_(reservation) {
   const trainer = STAFF_TRAINERS[reservation.trainerId];
-  if (reservation.type === "blocked") return "【" + trainer + "】【予定】" + reservation.customerName;
-  const label = reservation.type === "trial" ? "体験" : reservation.type === "consultation" ? "見学・相談" : "会員";
-  return "【" + trainer + "】【" + label + "】" + reservation.customerName + "様";
+  const trainerPrefix = trainer ? "【" + trainer + "】" : "";
+  const labels = {
+    member: "会員",
+    trial: "体験",
+    consultation: "見学・相談",
+    blocked: "予定",
+    tentative: "仮予約",
+    event: "イベント"
+  };
+  const label = labels[reservation.type] || "予定";
+  const honorific = ["member", "trial", "consultation"].includes(reservation.type) ? "様" : "";
+  return trainerPrefix + "【" + label + "】" + reservation.customerName + honorific;
 }
 
 function staffInferType_(title) {
+  if (title.indexOf("仮予約") >= 0 || title.indexOf("仮") >= 0) return "tentative";
+  if (title.indexOf("イベント") >= 0) return "event";
   if (title.indexOf("予定") >= 0) return "blocked";
   if (title.indexOf("体験") >= 0) return "trial";
   if (title.indexOf("相談") >= 0 || title.indexOf("見学") >= 0) return "consultation";
@@ -312,6 +345,100 @@ function staffCacheVersion_() {
 function staffBumpCacheVersion_() {
   const version = Number(staffCacheVersion_()) || 0;
   PropertiesService.getScriptProperties().setProperty(STAFF_CACHE_VERSION_KEY, String(version + 1));
+}
+
+function staffWriteAudit_(action, before, after) {
+  try {
+    const current = after || before;
+    if (!current) return;
+    const sheet = staffAuditSheet_();
+    sheet.appendRow([
+      Utilities.formatDate(new Date(), STAFF_TIMEZONE, "yyyy-MM-dd HH:mm:ss"),
+      action,
+      "スタッフカレンダー",
+      current.id,
+      current.customerName,
+      STAFF_TRAINERS[current.trainerId] || "指定なし",
+      current.startAt,
+      current.endAt,
+      STAFF_TYPES[current.type] || current.type,
+      current.notes || "",
+      before && after ? staffAuditSummary_(before) : ""
+    ]);
+  } catch (error) {
+    // A history write must not prevent the reservation itself from being saved.
+    console.error("操作履歴の記録に失敗しました", error);
+  }
+}
+
+function staffAuditSheet_() {
+  const properties = PropertiesService.getScriptProperties();
+  const spreadsheetId = properties.getProperty(STAFF_AUDIT_SPREADSHEET_KEY);
+  let spreadsheet = null;
+  if (spreadsheetId) {
+    try {
+      spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+    } catch (error) {
+      properties.deleteProperty(STAFF_AUDIT_SPREADSHEET_KEY);
+    }
+  }
+
+  if (!spreadsheet) {
+    spreadsheet = SpreadsheetApp.create("たまフィット スタッフカレンダー 操作履歴");
+    properties.setProperty(STAFF_AUDIT_SPREADSHEET_KEY, spreadsheet.getId());
+  }
+
+  let sheet = spreadsheet.getSheetByName(STAFF_AUDIT_SHEET_NAME);
+  if (!sheet) {
+    sheet = spreadsheet.getSheets()[0];
+    sheet.setName(STAFF_AUDIT_SHEET_NAME);
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["操作日時", "操作", "操作元", "予約ID", "お客様・予定名", "担当", "開始", "終了", "種類", "メモ", "変更前"]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function staffListAudit_(limit) {
+  const spreadsheetId = PropertiesService.getScriptProperties().getProperty(STAFF_AUDIT_SPREADSHEET_KEY);
+  if (!spreadsheetId) return [];
+
+  try {
+    const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+    const sheet = spreadsheet.getSheetByName(STAFF_AUDIT_SHEET_NAME);
+    if (!sheet || sheet.getLastRow() < 2) return [];
+    const count = Math.min(Math.max(Number(limit) || 100, 1), 100);
+    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getDisplayValues();
+    return values.slice(-count).reverse().map(function(row) {
+      return {
+        timestamp: row[0],
+        action: row[1],
+        source: row[2],
+        id: row[3],
+        customerName: row[4],
+        trainerName: row[5],
+        startAt: row[6],
+        endAt: row[7],
+        typeName: row[8],
+        notes: row[9],
+        beforeSummary: row[10]
+      };
+    });
+  } catch (error) {
+    console.error("操作履歴の読み込みに失敗しました", error);
+    return [];
+  }
+}
+
+function staffAuditSummary_(event) {
+  return [
+    event.customerName,
+    STAFF_TRAINERS[event.trainerId] || "指定なし",
+    event.startAt + "〜" + event.endAt,
+    STAFF_TYPES[event.type] || event.type,
+    event.notes || ""
+  ].join(" / ");
 }
 
 function staffResponse_(payload) {

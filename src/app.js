@@ -19,6 +19,7 @@ import {
 import { escapeHtml } from "./utils/html.js";
 import { renderBookingForm } from "./views/booking-form-view.js";
 import { renderDayView } from "./views/day-view.js";
+import { renderHistoryView } from "./views/history-view.js";
 import { renderError, renderLoading } from "./views/app-shell.js";
 import { renderMonthView } from "./views/month-view.js";
 import { renderWeekView } from "./views/week-view.js";
@@ -137,11 +138,44 @@ function getReturnLocation(fallbackDate = new Date()) {
   return sessionStorage.getItem("tamafit_calendar_return_hash") || lastCalendarHash || `#/month/${monthRouteValue(fallbackDate)}`;
 }
 
-function showToast(message) {
+function showToast(message, { duration = 2800, actionLabel = "", onAction = null } = {}) {
   clearTimeout(toastTimer);
-  toast.textContent = message;
+  toast.replaceChildren();
+  const text = document.createElement("span");
+  text.textContent = message;
+  toast.append(text);
+
+  if (actionLabel && onAction) {
+    const actionButton = document.createElement("button");
+    actionButton.className = "toast__action";
+    actionButton.type = "button";
+    actionButton.textContent = actionLabel;
+    actionButton.addEventListener("click", async () => {
+      clearTimeout(toastTimer);
+      actionButton.disabled = true;
+      try {
+        await onAction();
+      } catch (error) {
+        showToast(error.message || "元に戻せませんでした");
+      }
+    }, { once: true });
+    toast.append(actionButton);
+  }
+
   toast.classList.add("is-visible");
-  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
+  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), duration);
+}
+
+function reservationInputFromEvent(event) {
+  return {
+    customerName: event.customerName,
+    trainerId: event.trainerId,
+    startAt: event.startAt,
+    endAt: event.endAt,
+    duration: event.duration,
+    type: event.type,
+    notes: event.notes || ""
+  };
 }
 
 function showFormMessage(message) {
@@ -275,6 +309,10 @@ async function renderRoute({ forceRefresh = false } = {}) {
       html = renderBookingForm({ event, defaultDate: event.startAt.slice(0, 10) });
     }
 
+    if (route.name === "history") {
+      html = renderHistoryView(await repository.listHistory());
+    }
+
     if (renderId === pendingRender) {
       app.innerHTML = html;
       syncInstallBanner();
@@ -292,9 +330,9 @@ function syncBookingTypeField() {
   const typeSelect = document.getElementById("bookingType");
   const nameInput = document.getElementById("customerName");
   if (!typeSelect || !nameInput) return;
-  const isBlocked = typeSelect.value === "blocked";
-  nameInput.required = !isBlocked;
-  nameInput.placeholder = isBlocked ? "例：清掃・打ち合わせ" : "例：山田 花子";
+  const isSchedule = ["blocked", "tentative", "event"].includes(typeSelect.value);
+  nameInput.required = true;
+  nameInput.placeholder = isSchedule ? "例：清掃・打ち合わせ" : "例：山田 花子";
 }
 
 function bookingDateFromContext(button) {
@@ -365,6 +403,11 @@ async function handleAction(button) {
     navigate((lastCalendarHash || `#/month/${monthRouteValue(currentDateForRoute(route))}`).replace(/^#\//, ""));
   }
 
+  if (action === "open-history") {
+    rememberReturnLocation();
+    navigate("history");
+  }
+
   if (action === "back-from-form") {
     navigate(getReturnLocation().replace(/^#\//, ""));
   }
@@ -390,8 +433,16 @@ async function handleAction(button) {
     });
     if (!confirmed) return;
     await repository.deleteEvent(event.id);
-    showToast("予約を削除しました");
     navigate(`day/${event.startAt.slice(0, 10)}`);
+    showToast("予約を削除しました", {
+      duration: 8000,
+      actionLabel: "元に戻す",
+      onAction: async () => {
+        await repository.createEvent(reservationInputFromEvent(event));
+        navigate(`day/${event.startAt.slice(0, 10)}`);
+        showToast("予約を復元しました");
+      }
+    });
   }
 }
 
@@ -403,7 +454,7 @@ async function handleBookingSubmit(form) {
   const time = formData.get("time");
   const duration = Number(formData.get("duration"));
   const type = formData.get("type");
-  const customerName = String(formData.get("customerName") || "").trim() || (type === "blocked" ? "予定ブロック" : "");
+  const customerName = String(formData.get("customerName") || "").trim();
   const startAt = combineDateAndTime(date, time);
   const input = {
     customerName,
@@ -416,7 +467,7 @@ async function handleBookingSubmit(form) {
   };
 
   if (!customerName) {
-    showFormMessage("お客様名を入力してください。");
+    showFormMessage("お客様名または予定名を入力してください。");
     return;
   }
 
@@ -427,6 +478,17 @@ async function handleBookingSubmit(form) {
     return;
   }
 
+  const bufferWarnings = await repository.findBufferWarnings(input, eventId);
+  const bufferWarningSummary = bufferWarnings.length ? `
+    <div class="booking-buffer-warning" role="note">
+      <strong>前後30分の確認</strong>
+      <p>同じ担当者の予約と30分未満の間隔です。準備・移動時間を確認し、問題なければこのまま登録してください。</p>
+      <ul>
+        ${bufferWarnings.map((event) => `<li>${escapeHtml(event.startAt.slice(11, 16))}〜${escapeHtml(event.endAt.slice(11, 16))}</li>`).join("")}
+      </ul>
+    </div>
+  ` : "";
+
   const trainer = TRAINERS.find((item) => item.id === input.trainerId);
   const bookingType = BOOKING_TYPES.find((item) => item.id === input.type);
   const confirmed = await askForConfirmation({
@@ -435,9 +497,10 @@ async function handleBookingSubmit(form) {
       <dl>
         <div><dt>お客様</dt><dd>${escapeHtml(input.customerName)}</dd></div>
         <div><dt>日時</dt><dd>${escapeHtml(formatDayTitle(parseISODate(date)))}<br>${escapeHtml(time)}〜${escapeHtml(input.endAt.slice(11, 16))}</dd></div>
-        <div><dt>担当</dt><dd>${escapeHtml(trainer?.name || "担当未定")}</dd></div>
+        <div><dt>担当</dt><dd>${escapeHtml(trainer?.name || "指定なし")}</dd></div>
         <div><dt>種類</dt><dd>${escapeHtml(bookingType?.name || "通常予約")}</dd></div>
       </dl>
+      ${bufferWarningSummary}
     `,
     confirmLabel: eventId ? "変更を保存" : "予約を登録"
   });

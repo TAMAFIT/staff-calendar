@@ -8,7 +8,6 @@ import {
   toISODate
 } from "../utils/date.js";
 import { escapeAttribute, escapeHtml } from "../utils/html.js";
-import { getBookingType } from "../data/mock-calendar.js";
 import { renderAppShell } from "./app-shell.js";
 
 function groupEvents(events) {
@@ -22,9 +21,8 @@ function groupEvents(events) {
 
 function renderEventChip(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-  const type = getBookingType(event.type);
   const time = event.startAt.slice(11, 16);
-  const displayName = event.type === "blocked" ? type.name : event.customerName.split(/[ 　]/)[0];
+  const displayName = Array.from(event.customerName.split(/[ 　]/)[0]).slice(0, 2).join("");
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
   return `
     <span class="month-event month-event--${color}" title="${escapeAttribute(`${time} ${event.customerName}`)}">
@@ -91,6 +89,10 @@ export function renderMonthView(anchorDate, events, { isRefreshing = false } = {
         ${TRAINERS.map((trainer) => `<span><i class="legend-dot legend-dot--${trainer.color}"></i>${escapeHtml(trainer.name)}</span>`).join("")}
         <span><i class="legend-dot legend-dot--amber"></i>体験</span>
       </div>
+      <button class="history-link" type="button" data-action="open-history">
+        操作履歴をみる
+        <span>追加・変更・削除の記録</span>
+      </button>
     </section>
   `;
 
