@@ -149,7 +149,7 @@ export class CachedCalendarRepository extends CalendarRepository {
     return findBufferWarnings(await this.refreshEvents(date, date), candidate, excludeId);
   }
 
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     return this.source.listHistory(limit);
   }
 }

@@ -37,7 +37,7 @@ export function renderHistoryView(entries) {
       <div class="history-heading">
         <p class="eyebrow">作成・変更・削除</p>
         <h1>操作履歴</h1>
-        <p>最新100件を新しい順に表示します。</p>
+        <p>最新50件を新しい順に表示します。</p>
       </div>
       <div class="history-list">
         ${entries.length ? entries.map(renderEntry).join("") : `

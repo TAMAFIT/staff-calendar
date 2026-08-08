@@ -87,7 +87,7 @@ export class GoogleCalendarRepository extends CalendarRepository {
     return findBufferWarnings(await this.listEvents(date, date), candidate, excludeId);
   }
 
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     const response = await this.get("staffCalendarHistory", { limit });
     return response.entries || [];
   }

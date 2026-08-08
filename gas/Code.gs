@@ -18,7 +18,7 @@ const STAFF_META_MARKER = "\n[TAMAFIT_STAFF_CALENDAR]\n";
 const STAFF_LIST_CACHE_SECONDS = 20;
 const STAFF_CACHE_VERSION_KEY = "tamafit_staff_calendar_cache_version";
 const STAFF_AUDIT_PREFIX = "tamafit_staff_calendar_audit_";
-const STAFF_AUDIT_MAX_ENTRIES = 200;
+const STAFF_AUDIT_MAX_ENTRIES = 50;
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -409,7 +409,7 @@ function staffTrimAudit_(properties) {
 function staffListAudit_(limit) {
   try {
     const properties = PropertiesService.getScriptProperties();
-    const count = Math.min(Math.max(Number(limit) || 100, 1), 100);
+    const count = Math.min(Math.max(Number(limit) || 50, 1), 50);
     return staffAuditKeys_(properties).slice(0, count).map(function(key) {
       return JSON.parse(properties.getProperty(key));
     });

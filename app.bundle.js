@@ -283,7 +283,7 @@ var GoogleCalendarRepository = class extends CalendarRepository {
     const date = candidate.startAt.slice(0, 10);
     return findBufferWarnings(await this.listEvents(date, date), candidate, excludeId);
   }
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     const response = await this.get("staffCalendarHistory", { limit });
     return response.entries || [];
   }
@@ -467,7 +467,7 @@ var LocalCalendarRepository = class extends CalendarRepository {
   async findBufferWarnings(candidate, excludeId = null) {
     return findBufferWarnings(this.readAll(), candidate, excludeId);
   }
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     return this.readHistory().slice(0, limit);
   }
   async resetDemoData() {
@@ -596,7 +596,7 @@ var CachedCalendarRepository = class extends CalendarRepository {
     const date = candidate.startAt.slice(0, 10);
     return findBufferWarnings(await this.refreshEvents(date, date), candidate, excludeId);
   }
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     return this.source.listHistory(limit);
   }
 };
@@ -868,7 +868,7 @@ function renderHistoryView(entries) {
       <div class="history-heading">
         <p class="eyebrow">\u4F5C\u6210\u30FB\u5909\u66F4\u30FB\u524A\u9664</p>
         <h1>\u64CD\u4F5C\u5C65\u6B74</h1>
-        <p>\u6700\u65B0100\u4EF6\u3092\u65B0\u3057\u3044\u9806\u306B\u8868\u793A\u3057\u307E\u3059\u3002</p>
+        <p>\u6700\u65B050\u4EF6\u3092\u65B0\u3057\u3044\u9806\u306B\u8868\u793A\u3057\u307E\u3059\u3002</p>
       </div>
       <div class="history-list">
         ${entries.length ? entries.map(renderEntry).join("") : `

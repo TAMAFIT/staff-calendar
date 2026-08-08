@@ -131,7 +131,7 @@ export class LocalCalendarRepository extends CalendarRepository {
     return findBufferWarnings(this.readAll(), candidate, excludeId);
   }
 
-  async listHistory(limit = 100) {
+  async listHistory(limit = 50) {
     return this.readHistory().slice(0, limit);
   }
 
