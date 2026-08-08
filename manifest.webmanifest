@@ -1,0 +1,38 @@
+{
+  "name": "たまフィット スタッフカレンダー",
+  "short_name": "たまカレンダー",
+  "description": "たまフィットのスタッフ用予約カレンダー",
+  "lang": "ja",
+  "start_url": "./#/month",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f8f5",
+  "theme_color": "#0d8f4d",
+  "icons": [
+    {
+      "src": "./assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "予約を追加",
+      "short_name": "予約追加",
+      "url": "./#/booking/new"
+    },
+    {
+      "name": "今週の予約",
+      "short_name": "週間予約",
+      "url": "./#/week"
+    }
+  ]
+}

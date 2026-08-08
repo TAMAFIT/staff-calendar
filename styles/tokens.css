@@ -1,0 +1,34 @@
+:root {
+  color-scheme: light;
+  --green-950: #063b24;
+  --green-900: #075c34;
+  --green-800: #087541;
+  --green-700: #0d8f4d;
+  --green-600: #12a85a;
+  --green-500: #1dbb67;
+  --green-200: #bce8ce;
+  --green-100: #dcf4e5;
+  --green-50: #f0faf4;
+  --teal-700: #28796f;
+  --teal-100: #d8eeeb;
+  --amber-700: #a86909;
+  --amber-100: #fff0cc;
+  --red-700: #b23838;
+  --red-100: #fde3e3;
+  --ink: #15231b;
+  --ink-soft: #405248;
+  --muted: #6a7b71;
+  --line: #d8e5dd;
+  --line-strong: #bed5c7;
+  --surface: #ffffff;
+  --surface-soft: #f7faf8;
+  --page: #edf4ef;
+  --shadow-sm: 0 2px 8px rgba(20, 64, 38, 0.07);
+  --shadow-md: 0 12px 30px rgba(20, 64, 38, 0.13);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-max: 760px;
+}

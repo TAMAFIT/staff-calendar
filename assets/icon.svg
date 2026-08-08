@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="たまフィット カレンダー">
+  <rect width="512" height="512" rx="112" fill="#0d8f4d"/>
+  <rect x="78" y="102" width="356" height="332" rx="54" fill="#ffffff"/>
+  <path d="M78 190h356v-34c0-30-24-54-54-54H132c-30 0-54 24-54 54z" fill="#bce8ce"/>
+  <rect x="146" y="66" width="34" height="92" rx="17" fill="#ffffff"/>
+  <rect x="332" y="66" width="34" height="92" rx="17" fill="#ffffff"/>
+  <path d="M160 245h192v48h-70v105h-52V293h-70z" fill="#0d8f4d"/>
+</svg>

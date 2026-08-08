@@ -1,0 +1,223 @@
+.booking-form-view {
+  min-height: calc(100dvh - 67px);
+  padding: 22px 14px calc(30px + var(--safe-bottom));
+  background: var(--page);
+}
+
+.form-heading {
+  margin-bottom: 18px;
+}
+
+.form-heading h1 {
+  margin: 0;
+  font-size: 27px;
+  letter-spacing: -0.045em;
+}
+
+.form-heading > p:last-child {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.booking-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 18px 14px;
+  gap: 16px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.field {
+  min-width: 0;
+}
+
+.field--full,
+.form-message,
+.form-actions {
+  grid-column: 1 / -1;
+}
+
+.field label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.field label span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  min-height: 49px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.field input,
+.field textarea {
+  padding: 11px 12px;
+}
+
+.field textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--green-600);
+  outline: 3px solid rgba(29, 187, 103, 0.14);
+}
+
+.field small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.select-wrap {
+  position: relative;
+}
+
+.select-wrap::after {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--green-800);
+  border-bottom: 2px solid var(--green-800);
+  content: "";
+  pointer-events: none;
+  transform: translateY(-70%) rotate(45deg);
+}
+
+.field select {
+  padding: 10px 34px 10px 12px;
+  appearance: none;
+}
+
+.form-message {
+  display: none;
+  padding: 11px 12px;
+  border: 1px solid #efbcbc;
+  border-radius: 10px;
+  background: var(--red-100);
+  color: var(--red-700);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.form-message.is-visible {
+  display: block;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 3px;
+  gap: 8px;
+}
+
+.form-actions .button--primary:not(.button--wide) {
+  flex: 1;
+}
+
+.confirm-dialog {
+  width: min(calc(100% - 28px), 430px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 22px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 70px rgba(8, 54, 29, 0.24);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(8, 38, 21, 0.48);
+  backdrop-filter: blur(3px);
+}
+
+.confirm-dialog__body {
+  padding: 24px 20px 20px;
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 16px;
+  font-size: 21px;
+  letter-spacing: -0.03em;
+}
+
+.confirm-dialog__summary {
+  padding: 4px 0;
+  border-block: 1px solid var(--line);
+}
+
+.confirm-dialog dl {
+  margin: 0;
+}
+
+.confirm-dialog dl div {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  padding: 10px 2px;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.confirm-dialog dl div:last-child {
+  border-bottom: 0;
+}
+
+.confirm-dialog dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.confirm-dialog dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.confirm-dialog__actions {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  margin-top: 18px;
+  gap: 8px;
+}
+
+@media (max-width: 360px) {
+  .booking-form {
+    grid-template-columns: 1fr;
+  }
+
+  .field,
+  .field--full,
+  .form-message,
+  .form-actions {
+    grid-column: 1;
+  }
+}
