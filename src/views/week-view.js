@@ -60,7 +60,7 @@ export function renderWeekView(anchorDate, events, { isRefreshing = false } = {}
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="today">今日</button>
+        <button class="today-button" type="button" data-action="go-home">ホーム</button>
       </div>
 
       <div class="view-switch" aria-label="カレンダー表示">

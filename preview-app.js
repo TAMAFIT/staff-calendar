@@ -3,8 +3,8 @@
   var APP_NAME = "\u305F\u307E\u30D5\u30A3\u30C3\u30C8\u4E88\u7D04";
   var GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQf3thjGYKpV13bH6V0n1ZKQT23Wvvx8K7CQhRNIuH6mAQwih9Cg28r3ETnz9AVB4Etw/exec";
   var TRAINERS = [
-    { id: "tamai", name: "\u7389\u4E95", shortName: "\u7389\u4E95", color: "green" },
-    { id: "obayashi", name: "\u5927\u6797", shortName: "\u5927\u6797", color: "blue" }
+    { id: "tamai", name: "\u7389\u4E95", shortName: "\u7389\u4E95", color: "pink" },
+    { id: "obayashi", name: "\u5927\u6797", shortName: "\u5927\u6797", color: "aqua" }
   ];
   var BOOKING_TYPES = [
     { id: "member", name: "\u901A\u5E38\u4E88\u7D04" },
@@ -156,7 +156,8 @@
   var appState = {
     route: null,
     isLoading: false,
-    installPrompt: null
+    installPrompt: null,
+    isInstalled: false
   };
 
   // src/services/calendar-repository.js
@@ -546,11 +547,19 @@
             <button class="icon-button" type="button" data-action="${backAction}" aria-label="\u524D\u306E\u753B\u9762\u3078\u623B\u308B">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
             </button>
-          ` : `<div class="brand-mark" aria-hidden="true">T</div>`}
-          <div class="app-header__copy">
-            <span>${subtitle}</span>
-            <strong>${title}</strong>
-          </div>
+            <div class="app-header__copy">
+              <span>${subtitle}</span>
+              <strong>${title}</strong>
+            </div>
+          ` : `
+            <button class="header-home" type="button" data-action="go-home" aria-label="\u30DB\u30FC\u30E0\u306B\u623B\u308B">
+              <span class="brand-mark" aria-hidden="true">T</span>
+              <span class="app-header__copy">
+                <span>${subtitle}</span>
+                <strong>${title}</strong>
+              </span>
+            </button>
+          `}
           ${isRefreshing ? `<span class="refresh-status" role="status"><i aria-hidden="true"></i>\u66F4\u65B0\u4E2D</span>` : ""}
           ${showAdd ? `
             <button class="header-add-button" type="button" data-action="new-booking" aria-label="\u4E88\u7D04\u3092\u8FFD\u52A0">
@@ -865,7 +874,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="today">\u4ECA\u65E5</button>
+        <button class="today-button" type="button" data-action="go-home">\u30DB\u30FC\u30E0</button>
       </div>
 
       <div class="view-switch" aria-label="\u30AB\u30EC\u30F3\u30C0\u30FC\u8868\u793A">
@@ -884,6 +893,7 @@
   var repository = createCalendarRepository();
   var confirmDialog = document.getElementById("confirmDialog");
   var toast = document.getElementById("toast");
+  var pwaInstallDialog = document.getElementById("pwaInstallDialog");
   var lastCalendarHash = "";
   var pendingRender = 0;
   var toastTimer = null;
@@ -929,6 +939,7 @@
   }
   function displayCalendar(config, events, { isRefreshing = false, resetScroll = true } = {}) {
     app.innerHTML = config.render(events, isRefreshing);
+    syncInstallBanner();
     setRouteLoading(false);
     if (config.hash) lastCalendarHash = config.hash;
     if (config.view) saveLastView(config.view);
@@ -1016,6 +1027,52 @@
       confirmDialog.showModal();
     });
   }
+  function isStandaloneApp() {
+    return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  }
+  function isIOSSafari() {
+    const userAgent = navigator.userAgent;
+    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+    const isOtherIOSBrowser = /CriOS|FxiOS|EdgiOS|OPiOS/.test(userAgent);
+    return isIOS && !isOtherIOSBrowser;
+  }
+  function installMode() {
+    if (appState.isInstalled || isStandaloneApp()) return "";
+    if (appState.installPrompt) return "android";
+    if (isIOSSafari()) return "ios";
+    return "";
+  }
+  function syncInstallBanner() {
+    app.querySelector(".pwa-install-banner")?.remove();
+    const mode = installMode();
+    const main = app.querySelector(".app-main");
+    if (!mode || !main) return;
+    const label = mode === "android" ? "\u30A2\u30D7\u30EA\u3068\u3057\u3066\u8FFD\u52A0" : "\u30DB\u30FC\u30E0\u753B\u9762\u306B\u8FFD\u52A0";
+    const description = mode === "android" ? "\u30DB\u30FC\u30E0\u753B\u9762\u304B\u3089\u3059\u3050\u958B\u3051\u307E\u3059" : "Safari\u306E\u5171\u6709\u30E1\u30CB\u30E5\u30FC\u304B\u3089\u8FFD\u52A0\u3067\u304D\u307E\u3059";
+    main.insertAdjacentHTML("afterbegin", `
+    <section class="pwa-install-banner" aria-label="\u30A2\u30D7\u30EA\u3068\u3057\u3066\u8FFD\u52A0">
+      <div>
+        <strong>${label}</strong>
+        <span>${description}</span>
+      </div>
+      <button class="pwa-install-banner__button" type="button" data-action="install-app">\u8FFD\u52A0</button>
+    </section>
+  `);
+  }
+  async function installApp() {
+    if (appState.installPrompt) {
+      const prompt = appState.installPrompt;
+      appState.installPrompt = null;
+      await prompt.prompt();
+      const result = await prompt.userChoice;
+      syncInstallBanner();
+      showToast(result.outcome === "accepted" ? "\u30A2\u30D7\u30EA\u3092\u8FFD\u52A0\u3057\u307E\u3057\u305F" : "\u8FFD\u52A0\u306F\u3044\u3064\u3067\u3082\u884C\u3048\u307E\u3059");
+      return;
+    }
+    if (isIOSSafari() && pwaInstallDialog && !pwaInstallDialog.open) {
+      pwaInstallDialog.showModal();
+    }
+  }
   async function renderRoute({ forceRefresh = false } = {}) {
     const renderId = ++pendingRender;
     const route = parseRoute();
@@ -1046,6 +1103,7 @@
       }
       if (renderId === pendingRender) {
         app.innerHTML = html;
+        syncInstallBanner();
         window.scrollTo({ top: 0, behavior: "instant" });
         syncBookingTypeField();
       }
@@ -1088,6 +1146,12 @@
     if (action === "today") {
       const today = /* @__PURE__ */ new Date();
       navigate(route.name === "week" ? `week/${toISODate(today)}` : `month/${monthRouteValue(today)}`);
+    }
+    if (action === "go-home") {
+      navigate(`month/${monthRouteValue(/* @__PURE__ */ new Date())}`);
+    }
+    if (action === "install-app") {
+      await installApp();
     }
     if (action === "show-month") {
       navigate(`month/${monthRouteValue(currentDateForRoute(route))}`);
@@ -1207,6 +1271,16 @@
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     appState.installPrompt = event;
+    syncInstallBanner();
+  });
+  window.addEventListener("appinstalled", () => {
+    appState.installPrompt = null;
+    appState.isInstalled = true;
+    syncInstallBanner();
+    showToast("\u30A2\u30D7\u30EA\u3092\u8FFD\u52A0\u3057\u307E\u3057\u305F");
+  });
+  pwaInstallDialog?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-pwa-dialog-close]")) pwaInstallDialog.close();
   });
   if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));

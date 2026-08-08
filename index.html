@@ -33,6 +33,21 @@
       </div>
     </dialog>
 
+    <dialog class="confirm-dialog pwa-install-dialog" id="pwaInstallDialog">
+      <div class="confirm-dialog__body">
+        <p class="eyebrow">iPhoneでアプリとして追加</p>
+        <h2>Safariからホーム画面に追加</h2>
+        <ol class="pwa-install-dialog__steps">
+          <li>画面下の共有ボタンを押す</li>
+          <li>「ホーム画面に追加」を選ぶ</li>
+          <li>右上の「追加」を押す</li>
+        </ol>
+        <div class="confirm-dialog__actions">
+          <button class="button button--primary button--wide" type="button" data-pwa-dialog-close>わかりました</button>
+        </div>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="./app.bundle.js"></script>
   </body>

@@ -15,11 +15,19 @@ export function renderAppShell(content, {
             <button class="icon-button" type="button" data-action="${backAction}" aria-label="前の画面へ戻る">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
             </button>
-          ` : `<div class="brand-mark" aria-hidden="true">T</div>`}
-          <div class="app-header__copy">
-            <span>${subtitle}</span>
-            <strong>${title}</strong>
-          </div>
+            <div class="app-header__copy">
+              <span>${subtitle}</span>
+              <strong>${title}</strong>
+            </div>
+          ` : `
+            <button class="header-home" type="button" data-action="go-home" aria-label="ホームに戻る">
+              <span class="brand-mark" aria-hidden="true">T</span>
+              <span class="app-header__copy">
+                <span>${subtitle}</span>
+                <strong>${title}</strong>
+              </span>
+            </button>
+          `}
           ${isRefreshing ? `<span class="refresh-status" role="status"><i aria-hidden="true"></i>更新中</span>` : ""}
           ${showAdd ? `
             <button class="header-add-button" type="button" data-action="new-booking" aria-label="予約を追加">

@@ -27,6 +27,7 @@ const app = document.getElementById("app");
 const repository = createCalendarRepository();
 const confirmDialog = document.getElementById("confirmDialog");
 const toast = document.getElementById("toast");
+const pwaInstallDialog = document.getElementById("pwaInstallDialog");
 let lastCalendarHash = "";
 let pendingRender = 0;
 let toastTimer = null;
@@ -78,6 +79,7 @@ function setRouteLoading(isLoading) {
 
 function displayCalendar(config, events, { isRefreshing = false, resetScroll = true } = {}) {
   app.innerHTML = config.render(events, isRefreshing);
+  syncInstallBanner();
   setRouteLoading(false);
   if (config.hash) lastCalendarHash = config.hash;
   if (config.view) saveLastView(config.view);
@@ -184,6 +186,61 @@ function askForConfirmation({ eyebrow = "内容確認", title, summary, confirmL
   });
 }
 
+function isStandaloneApp() {
+  return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function isIOSSafari() {
+  const userAgent = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+  const isOtherIOSBrowser = /CriOS|FxiOS|EdgiOS|OPiOS/.test(userAgent);
+  return isIOS && !isOtherIOSBrowser;
+}
+
+function installMode() {
+  if (appState.isInstalled || isStandaloneApp()) return "";
+  if (appState.installPrompt) return "android";
+  if (isIOSSafari()) return "ios";
+  return "";
+}
+
+function syncInstallBanner() {
+  app.querySelector(".pwa-install-banner")?.remove();
+  const mode = installMode();
+  const main = app.querySelector(".app-main");
+  if (!mode || !main) return;
+
+  const label = mode === "android" ? "アプリとして追加" : "ホーム画面に追加";
+  const description = mode === "android"
+    ? "ホーム画面からすぐ開けます"
+    : "Safariの共有メニューから追加できます";
+  main.insertAdjacentHTML("afterbegin", `
+    <section class="pwa-install-banner" aria-label="アプリとして追加">
+      <div>
+        <strong>${label}</strong>
+        <span>${description}</span>
+      </div>
+      <button class="pwa-install-banner__button" type="button" data-action="install-app">追加</button>
+    </section>
+  `);
+}
+
+async function installApp() {
+  if (appState.installPrompt) {
+    const prompt = appState.installPrompt;
+    appState.installPrompt = null;
+    await prompt.prompt();
+    const result = await prompt.userChoice;
+    syncInstallBanner();
+    showToast(result.outcome === "accepted" ? "アプリを追加しました" : "追加はいつでも行えます");
+    return;
+  }
+
+  if (isIOSSafari() && pwaInstallDialog && !pwaInstallDialog.open) {
+    pwaInstallDialog.showModal();
+  }
+}
+
 async function renderRoute({ forceRefresh = false } = {}) {
   const renderId = ++pendingRender;
   const route = parseRoute();
@@ -220,6 +277,7 @@ async function renderRoute({ forceRefresh = false } = {}) {
 
     if (renderId === pendingRender) {
       app.innerHTML = html;
+      syncInstallBanner();
       window.scrollTo({ top: 0, behavior: "instant" });
       syncBookingTypeField();
     }
@@ -270,6 +328,14 @@ async function handleAction(button) {
   if (action === "today") {
     const today = new Date();
     navigate(route.name === "week" ? `week/${toISODate(today)}` : `month/${monthRouteValue(today)}`);
+  }
+
+  if (action === "go-home") {
+    navigate(`month/${monthRouteValue(new Date())}`);
+  }
+
+  if (action === "install-app") {
+    await installApp();
   }
 
   if (action === "show-month") {
@@ -407,6 +473,18 @@ window.addEventListener("hashchange", renderRoute);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   appState.installPrompt = event;
+  syncInstallBanner();
+});
+
+window.addEventListener("appinstalled", () => {
+  appState.installPrompt = null;
+  appState.isInstalled = true;
+  syncInstallBanner();
+  showToast("アプリを追加しました");
+});
+
+pwaInstallDialog?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-pwa-dialog-close]")) pwaInstallDialog.close();
 });
 
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {

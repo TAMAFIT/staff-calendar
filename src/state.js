@@ -21,5 +21,6 @@ export function saveLastView(view) {
 export const appState = {
   route: null,
   isLoading: false,
-  installPrompt: null
+  installPrompt: null,
+  isInstalled: false
 };

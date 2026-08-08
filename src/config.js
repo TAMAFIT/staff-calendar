@@ -5,8 +5,8 @@ export const APP_NAME = "たまフィット予約";
 export const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQf3thjGYKpV13bH6V0n1ZKQT23Wvvx8K7CQhRNIuH6mAQwih9Cg28r3ETnz9AVB4Etw/exec";
 
 export const TRAINERS = [
-  { id: "tamai", name: "玉井", shortName: "玉井", color: "green" },
-  { id: "obayashi", name: "大林", shortName: "大林", color: "blue" }
+  { id: "tamai", name: "玉井", shortName: "玉井", color: "pink" },
+  { id: "obayashi", name: "大林", shortName: "大林", color: "aqua" }
 ];
 
 export const BOOKING_TYPES = [
