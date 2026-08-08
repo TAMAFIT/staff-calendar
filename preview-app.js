@@ -394,12 +394,132 @@
     }
   };
 
+  // src/services/cached-calendar-repository.js
+  var CACHE_TTL_MS = 2e4;
+  var MAX_SNAPSHOTS = 4;
+  function canUseStorage(storage) {
+    return storage && typeof storage.getItem === "function" && typeof storage.setItem === "function";
+  }
+  function rangeContains(snapshot, startDate, endDate) {
+    return snapshot.startDate <= startDate && snapshot.endDate >= endDate;
+  }
+  function eventsForRange(events, startDate, endDate) {
+    return events.filter((event) => event.startAt.slice(0, 10) >= startDate && event.startAt.slice(0, 10) <= endDate).sort((a, b) => a.startAt.localeCompare(b.startAt));
+  }
+  var CachedCalendarRepository = class extends CalendarRepository {
+    constructor(source, {
+      storage = globalThis.localStorage,
+      storageKey = "tamafit_staff_calendar_cache_v1",
+      now = () => Date.now(),
+      ttlMs = CACHE_TTL_MS
+    } = {}) {
+      super();
+      this.source = source;
+      this.storage = storage;
+      this.storageKey = storageKey;
+      this.now = now;
+      this.ttlMs = ttlMs;
+      this.pendingRequests = /* @__PURE__ */ new Map();
+      this.cacheGeneration = 0;
+      this.snapshots = this.readSnapshots();
+    }
+    readSnapshots() {
+      if (!canUseStorage(this.storage)) return [];
+      try {
+        const saved = JSON.parse(this.storage.getItem(this.storageKey) || "[]");
+        return Array.isArray(saved) ? saved.filter((snapshot) => snapshot && Array.isArray(snapshot.events) && snapshot.startDate && snapshot.endDate && snapshot.fetchedAt) : [];
+      } catch {
+        return [];
+      }
+    }
+    writeSnapshots() {
+      if (!canUseStorage(this.storage)) return;
+      try {
+        this.storage.setItem(this.storageKey, JSON.stringify(this.snapshots));
+      } catch {
+      }
+    }
+    getCachedEvents(startDate, endDate) {
+      const snapshot = this.snapshots.filter((item) => rangeContains(item, startDate, endDate)).sort((a, b) => b.fetchedAt - a.fetchedAt)[0];
+      if (!snapshot) return null;
+      return {
+        events: eventsForRange(snapshot.events, startDate, endDate),
+        fetchedAt: snapshot.fetchedAt,
+        isFresh: this.now() - snapshot.fetchedAt < this.ttlMs
+      };
+    }
+    async listEvents(startDate, endDate) {
+      const cached = this.getCachedEvents(startDate, endDate);
+      if (cached?.isFresh) return cached.events;
+      return this.refreshEvents(startDate, endDate);
+    }
+    async refreshEvents(startDate, endDate) {
+      const requestKey = `${startDate}:${endDate}`;
+      if (this.pendingRequests.has(requestKey)) return this.pendingRequests.get(requestKey);
+      const generation = this.cacheGeneration;
+      const request = this.source.listEvents(startDate, endDate).then((events) => {
+        if (generation !== this.cacheGeneration) return eventsForRange(events, startDate, endDate);
+        const snapshot = {
+          startDate,
+          endDate,
+          events: [...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),
+          fetchedAt: this.now()
+        };
+        this.snapshots = [snapshot, ...this.snapshots.filter((item) => item.startDate !== startDate || item.endDate !== endDate)].slice(0, MAX_SNAPSHOTS);
+        this.writeSnapshots();
+        return eventsForRange(snapshot.events, startDate, endDate);
+      }).finally(() => this.pendingRequests.delete(requestKey));
+      this.pendingRequests.set(requestKey, request);
+      return request;
+    }
+    invalidate() {
+      this.cacheGeneration += 1;
+      this.snapshots = [];
+      this.pendingRequests.clear();
+      if (!canUseStorage(this.storage)) return;
+      try {
+        this.storage.removeItem(this.storageKey);
+      } catch {
+      }
+    }
+    async getEvent(id) {
+      const cached = this.snapshots.flatMap((snapshot) => snapshot.events).find((event) => event.id === id);
+      return cached || this.source.getEvent(id);
+    }
+    async createEvent(input) {
+      const event = await this.source.createEvent(input);
+      this.invalidate();
+      return event;
+    }
+    async updateEvent(id, input) {
+      const event = await this.source.updateEvent(id, input);
+      this.invalidate();
+      return event;
+    }
+    async deleteEvent(id) {
+      await this.source.deleteEvent(id);
+      this.invalidate();
+    }
+    async findConflicts(candidate, excludeId = null) {
+      const date = candidate.startAt.slice(0, 10);
+      const events = await this.refreshEvents(date, date);
+      return events.filter((event) => {
+        if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
+        return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
+      });
+    }
+  };
+
   // src/services/repository-factory.js
   function createCalendarRepository() {
     if (window.location.protocol === "file:" && !window.TAMAFIT_USE_LIVE_CALENDAR) {
-      return new LocalCalendarRepository();
+      return new CachedCalendarRepository(new LocalCalendarRepository(), {
+        storageKey: "tamafit_staff_calendar_mock_cache_v1"
+      });
     }
-    return new GoogleCalendarRepository();
+    return new CachedCalendarRepository(new GoogleCalendarRepository(), {
+      storageKey: "tamafit_staff_calendar_google_cache_v1"
+    });
   }
 
   // src/utils/html.js
@@ -415,7 +535,8 @@
     title = APP_NAME,
     subtitle = "\u30B9\u30BF\u30C3\u30D5\u30AB\u30EC\u30F3\u30C0\u30FC",
     backAction = "",
-    showAdd = true
+    showAdd = true,
+    isRefreshing = false
   } = {}) {
     return `
     <div class="app-shell">
@@ -430,6 +551,7 @@
             <span>${subtitle}</span>
             <strong>${title}</strong>
           </div>
+          ${isRefreshing ? `<span class="refresh-status" role="status"><i aria-hidden="true"></i>\u66F4\u65B0\u4E2D</span>` : ""}
           ${showAdd ? `
             <button class="header-add-button" type="button" data-action="new-booking" aria-label="\u4E88\u7D04\u3092\u8FFD\u52A0">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -572,7 +694,7 @@
     </button>
   `;
   }
-  function renderDayView(date, events) {
+  function renderDayView(date, events, { isRefreshing = false } = {}) {
     const content = `
     <section class="day-view">
       <div class="day-summary">
@@ -603,7 +725,8 @@
       title: "\u4E88\u7D04\u4E00\u89A7",
       subtitle: formatDayTitle(date),
       backAction: "back-to-calendar",
-      showAdd: false
+      showAdd: false,
+      isRefreshing
     });
   }
 
@@ -628,7 +751,7 @@
     </span>
   `;
   }
-  function renderMonthView(anchorDate, events) {
+  function renderMonthView(anchorDate, events, { isRefreshing = false } = {}) {
     const days = getMonthGrid(anchorDate);
     const eventsByDate = groupEvents(events);
     const currentMonth = anchorDate.getMonth();
@@ -685,7 +808,7 @@
       </div>
     </section>
   `;
-    return renderAppShell(content);
+    return renderAppShell(content, { isRefreshing });
   }
 
   // src/views/week-view.js
@@ -711,7 +834,7 @@
     </div>
   `;
   }
-  function renderWeekView(anchorDate, events) {
+  function renderWeekView(anchorDate, events, { isRefreshing = false } = {}) {
     const days = getWeekDays(anchorDate);
     const grouped = groupEvents2(events);
     const dayRows = days.map((date) => {
@@ -753,7 +876,7 @@
       <div class="week-list">${dayRows}</div>
     </section>
   `;
-    return renderAppShell(content);
+    return renderAppShell(content, { isRefreshing });
   }
 
   // src/app.js
@@ -764,6 +887,77 @@
   var lastCalendarHash = "";
   var pendingRender = 0;
   var toastTimer = null;
+  function calendarRouteConfig(route) {
+    if (route.name === "month") {
+      const anchor = parseMonthRoute(route.month);
+      const days = getMonthGrid(anchor);
+      return {
+        startDate: toISODate(days[0]),
+        endDate: toISODate(days.at(-1)),
+        render: (events, isRefreshing) => renderMonthView(anchor, events, { isRefreshing }),
+        hash: window.location.hash,
+        view: "month"
+      };
+    }
+    if (route.name === "week") {
+      const anchor = currentDateForRoute(route);
+      const days = getWeekDays(anchor);
+      return {
+        startDate: toISODate(days[0]),
+        endDate: toISODate(days.at(-1)),
+        render: (events, isRefreshing) => renderWeekView(anchor, events, { isRefreshing }),
+        hash: window.location.hash,
+        view: "week"
+      };
+    }
+    if (route.name === "day") {
+      const date = currentDateForRoute(route);
+      const isoDate = toISODate(date);
+      return {
+        startDate: isoDate,
+        endDate: isoDate,
+        render: (events, isRefreshing) => renderDayView(date, events, { isRefreshing }),
+        hash: "",
+        view: ""
+      };
+    }
+    return null;
+  }
+  function setRouteLoading(isLoading) {
+    app.classList.toggle("is-refreshing", isLoading);
+    app.setAttribute("aria-busy", String(isLoading));
+  }
+  function displayCalendar(config, events, { isRefreshing = false, resetScroll = true } = {}) {
+    app.innerHTML = config.render(events, isRefreshing);
+    setRouteLoading(false);
+    if (config.hash) lastCalendarHash = config.hash;
+    if (config.view) saveLastView(config.view);
+    if (resetScroll) window.scrollTo({ top: 0, behavior: "instant" });
+  }
+  async function renderCalendarRoute(config, renderId, forceRefresh) {
+    const cached = repository.getCachedEvents?.(config.startDate, config.endDate);
+    const shouldRefresh = forceRefresh || !cached || !cached.isFresh;
+    if (cached) {
+      displayCalendar(config, cached.events, { isRefreshing: shouldRefresh });
+      if (!shouldRefresh) return;
+      repository.refreshEvents(config.startDate, config.endDate).then((events2) => {
+        if (renderId !== pendingRender) return;
+        displayCalendar(config, events2, { resetScroll: false });
+      }).catch((error) => {
+        if (renderId !== pendingRender) return;
+        setRouteLoading(false);
+        showToast(error.message || "\u6700\u65B0\u306E\u4E88\u7D04\u72B6\u6CC1\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F");
+      });
+      return;
+    }
+    if (app.querySelector(".calendar-view, .day-view")) {
+      setRouteLoading(true);
+    } else {
+      app.innerHTML = renderLoading();
+    }
+    const events = forceRefresh ? await repository.refreshEvents(config.startDate, config.endDate) : await repository.listEvents(config.startDate, config.endDate);
+    if (renderId === pendingRender) displayCalendar(config, events);
+  }
   function currentDateForRoute(route) {
     if (route.name === "month") return parseMonthRoute(route.month);
     if ((route.name === "week" || route.name === "day" || route.name === "booking-new") && isValidISODate(route.date)) {
@@ -822,35 +1016,25 @@
       confirmDialog.showModal();
     });
   }
-  async function renderRoute() {
+  async function renderRoute({ forceRefresh = false } = {}) {
     const renderId = ++pendingRender;
     const route = parseRoute();
     appState.route = route;
+    const calendarConfig = calendarRouteConfig(route);
+    if (calendarConfig) {
+      try {
+        await renderCalendarRoute(calendarConfig, renderId, forceRefresh);
+      } catch (error) {
+        if (renderId === pendingRender) {
+          app.innerHTML = renderError(escapeHtml(error.message || "\u8AAD\u307F\u8FBC\u307F\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002"));
+          setRouteLoading(false);
+        }
+      }
+      return;
+    }
     app.innerHTML = renderLoading();
     try {
       let html = "";
-      if (route.name === "month") {
-        const anchor = parseMonthRoute(route.month);
-        const days = getMonthGrid(anchor);
-        const events = await repository.listEvents(toISODate(days[0]), toISODate(days.at(-1)));
-        html = renderMonthView(anchor, events);
-        lastCalendarHash = window.location.hash;
-        saveLastView("month");
-      }
-      if (route.name === "week") {
-        const anchor = currentDateForRoute(route);
-        const days = getWeekDays(anchor);
-        const events = await repository.listEvents(toISODate(days[0]), toISODate(days.at(-1)));
-        html = renderWeekView(anchor, events);
-        lastCalendarHash = window.location.hash;
-        saveLastView("week");
-      }
-      if (route.name === "day") {
-        const date = currentDateForRoute(route);
-        const isoDate = toISODate(date);
-        const events = await repository.listEvents(isoDate, isoDate);
-        html = renderDayView(date, events);
-      }
       if (route.name === "booking-new") {
         const date = currentDateForRoute(route);
         html = renderBookingForm({ defaultDate: toISODate(date) });
@@ -930,7 +1114,7 @@
       navigate(getReturnLocation().replace(/^#\//, ""));
     }
     if (action === "reload") {
-      renderRoute();
+      renderRoute({ forceRefresh: true });
     }
     if (action === "delete-booking") {
       const event = await repository.getEvent(button.dataset.id);

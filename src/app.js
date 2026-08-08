@@ -31,6 +31,92 @@ let lastCalendarHash = "";
 let pendingRender = 0;
 let toastTimer = null;
 
+function calendarRouteConfig(route) {
+  if (route.name === "month") {
+    const anchor = parseMonthRoute(route.month);
+    const days = getMonthGrid(anchor);
+    return {
+      startDate: toISODate(days[0]),
+      endDate: toISODate(days.at(-1)),
+      render: (events, isRefreshing) => renderMonthView(anchor, events, { isRefreshing }),
+      hash: window.location.hash,
+      view: "month"
+    };
+  }
+
+  if (route.name === "week") {
+    const anchor = currentDateForRoute(route);
+    const days = getWeekDays(anchor);
+    return {
+      startDate: toISODate(days[0]),
+      endDate: toISODate(days.at(-1)),
+      render: (events, isRefreshing) => renderWeekView(anchor, events, { isRefreshing }),
+      hash: window.location.hash,
+      view: "week"
+    };
+  }
+
+  if (route.name === "day") {
+    const date = currentDateForRoute(route);
+    const isoDate = toISODate(date);
+    return {
+      startDate: isoDate,
+      endDate: isoDate,
+      render: (events, isRefreshing) => renderDayView(date, events, { isRefreshing }),
+      hash: "",
+      view: ""
+    };
+  }
+
+  return null;
+}
+
+function setRouteLoading(isLoading) {
+  app.classList.toggle("is-refreshing", isLoading);
+  app.setAttribute("aria-busy", String(isLoading));
+}
+
+function displayCalendar(config, events, { isRefreshing = false, resetScroll = true } = {}) {
+  app.innerHTML = config.render(events, isRefreshing);
+  setRouteLoading(false);
+  if (config.hash) lastCalendarHash = config.hash;
+  if (config.view) saveLastView(config.view);
+  if (resetScroll) window.scrollTo({ top: 0, behavior: "instant" });
+}
+
+async function renderCalendarRoute(config, renderId, forceRefresh) {
+  const cached = repository.getCachedEvents?.(config.startDate, config.endDate);
+  const shouldRefresh = forceRefresh || !cached || !cached.isFresh;
+
+  if (cached) {
+    displayCalendar(config, cached.events, { isRefreshing: shouldRefresh });
+    if (!shouldRefresh) return;
+
+    repository.refreshEvents(config.startDate, config.endDate)
+      .then((events) => {
+        if (renderId !== pendingRender) return;
+        displayCalendar(config, events, { resetScroll: false });
+      })
+      .catch((error) => {
+        if (renderId !== pendingRender) return;
+        setRouteLoading(false);
+        showToast(error.message || "最新の予約状況を取得できませんでした");
+      });
+    return;
+  }
+
+  if (app.querySelector(".calendar-view, .day-view")) {
+    setRouteLoading(true);
+  } else {
+    app.innerHTML = renderLoading();
+  }
+
+  const events = forceRefresh
+    ? await repository.refreshEvents(config.startDate, config.endDate)
+    : await repository.listEvents(config.startDate, config.endDate);
+  if (renderId === pendingRender) displayCalendar(config, events);
+}
+
 function currentDateForRoute(route) {
   if (route.name === "month") return parseMonthRoute(route.month);
   if ((route.name === "week" || route.name === "day" || route.name === "booking-new") && isValidISODate(route.date)) {
@@ -98,39 +184,28 @@ function askForConfirmation({ eyebrow = "内容確認", title, summary, confirmL
   });
 }
 
-async function renderRoute() {
+async function renderRoute({ forceRefresh = false } = {}) {
   const renderId = ++pendingRender;
   const route = parseRoute();
   appState.route = route;
+
+  const calendarConfig = calendarRouteConfig(route);
+  if (calendarConfig) {
+    try {
+      await renderCalendarRoute(calendarConfig, renderId, forceRefresh);
+    } catch (error) {
+      if (renderId === pendingRender) {
+        app.innerHTML = renderError(escapeHtml(error.message || "読み込みに失敗しました。"));
+        setRouteLoading(false);
+      }
+    }
+    return;
+  }
+
   app.innerHTML = renderLoading();
 
   try {
     let html = "";
-
-    if (route.name === "month") {
-      const anchor = parseMonthRoute(route.month);
-      const days = getMonthGrid(anchor);
-      const events = await repository.listEvents(toISODate(days[0]), toISODate(days.at(-1)));
-      html = renderMonthView(anchor, events);
-      lastCalendarHash = window.location.hash;
-      saveLastView("month");
-    }
-
-    if (route.name === "week") {
-      const anchor = currentDateForRoute(route);
-      const days = getWeekDays(anchor);
-      const events = await repository.listEvents(toISODate(days[0]), toISODate(days.at(-1)));
-      html = renderWeekView(anchor, events);
-      lastCalendarHash = window.location.hash;
-      saveLastView("week");
-    }
-
-    if (route.name === "day") {
-      const date = currentDateForRoute(route);
-      const isoDate = toISODate(date);
-      const events = await repository.listEvents(isoDate, isoDate);
-      html = renderDayView(date, events);
-    }
 
     if (route.name === "booking-new") {
       const date = currentDateForRoute(route);
@@ -229,7 +304,7 @@ async function handleAction(button) {
   }
 
   if (action === "reload") {
-    renderRoute();
+    renderRoute({ forceRefresh: true });
   }
 
   if (action === "delete-booking") {

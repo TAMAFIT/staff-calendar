@@ -33,7 +33,7 @@ function renderEventChip(event) {
   `;
 }
 
-export function renderMonthView(anchorDate, events) {
+export function renderMonthView(anchorDate, events, { isRefreshing = false } = {}) {
   const days = getMonthGrid(anchorDate);
   const eventsByDate = groupEvents(events);
   const currentMonth = anchorDate.getMonth();
@@ -94,5 +94,5 @@ export function renderMonthView(anchorDate, events) {
     </section>
   `;
 
-  return renderAppShell(content);
+  return renderAppShell(content, { isRefreshing });
 }

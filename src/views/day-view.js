@@ -28,7 +28,7 @@ function renderDayEvent(event) {
   `;
 }
 
-export function renderDayView(date, events) {
+export function renderDayView(date, events, { isRefreshing = false } = {}) {
   const content = `
     <section class="day-view">
       <div class="day-summary">
@@ -59,6 +59,7 @@ export function renderDayView(date, events) {
     title: "予約一覧",
     subtitle: formatDayTitle(date),
     backAction: "back-to-calendar",
-    showAdd: false
+    showAdd: false,
+    isRefreshing
   });
 }

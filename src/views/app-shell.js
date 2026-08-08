@@ -4,7 +4,8 @@ export function renderAppShell(content, {
   title = APP_NAME,
   subtitle = "スタッフカレンダー",
   backAction = "",
-  showAdd = true
+  showAdd = true,
+  isRefreshing = false
 } = {}) {
   return `
     <div class="app-shell">
@@ -19,6 +20,7 @@ export function renderAppShell(content, {
             <span>${subtitle}</span>
             <strong>${title}</strong>
           </div>
+          ${isRefreshing ? `<span class="refresh-status" role="status"><i aria-hidden="true"></i>更新中</span>` : ""}
           ${showAdd ? `
             <button class="header-add-button" type="button" data-action="new-booking" aria-label="予約を追加">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>

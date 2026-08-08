@@ -15,6 +15,8 @@
 const STAFF_CALENDAR_ID = "tamafit.takamatsu@gmail.com";
 const STAFF_TIMEZONE = "Asia/Tokyo";
 const STAFF_META_MARKER = "\n[TAMAFIT_STAFF_CALENDAR]\n";
+const STAFF_LIST_CACHE_SECONDS = 20;
+const STAFF_CACHE_VERSION_KEY = "tamafit_staff_calendar_cache_version";
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -86,9 +88,26 @@ function staffListEvents_(startDate, endDate) {
   const end = staffDayAfter_(endDate);
   if (end.getTime() <= start.getTime()) throw new Error("期間を確認してください。");
 
-  return staffCalendar_().getEvents(start, end)
+  const cache = CacheService.getScriptCache();
+  const cacheKey = ["list", staffCacheVersion_(), startDate, endDate].join(":");
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (error) {
+      cache.remove(cacheKey);
+    }
+  }
+
+  const events = staffCalendar_().getEvents(start, end)
     .map(staffSerializeEvent_)
     .sort(function(a, b) { return a.startAt.localeCompare(b.startAt); });
+  try {
+    cache.put(cacheKey, JSON.stringify(events), STAFF_LIST_CACHE_SECONDS);
+  } catch (error) {
+    // A very large event description should not make the calendar unavailable.
+  }
+  return events;
 }
 
 function staffGetEvent_(id) {
@@ -108,6 +127,7 @@ function staffCreateEvent_(input) {
     staffParseDateTime_(reservation.endAt)
   );
   staffWriteMetadata_(event, reservation);
+  staffBumpCacheVersion_();
   return staffSerializeEvent_(event);
 }
 
@@ -121,6 +141,7 @@ function staffUpdateEvent_(id, input) {
   event.setTitle(staffTitle_(reservation));
   event.setTime(staffParseDateTime_(reservation.startAt), staffParseDateTime_(reservation.endAt));
   staffWriteMetadata_(event, reservation);
+  staffBumpCacheVersion_();
   return staffSerializeEvent_(event);
 }
 
@@ -129,6 +150,7 @@ function staffDeleteEvent_(id) {
   const event = staffCalendar_().getEventById(String(id));
   if (!event) throw new Error("予約が見つかりませんでした。");
   event.deleteEvent();
+  staffBumpCacheVersion_();
 }
 
 function staffNormalizeInput_(input) {
@@ -281,6 +303,15 @@ function staffWithLock_(callback) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function staffCacheVersion_() {
+  return PropertiesService.getScriptProperties().getProperty(STAFF_CACHE_VERSION_KEY) || "0";
+}
+
+function staffBumpCacheVersion_() {
+  const version = Number(staffCacheVersion_()) || 0;
+  PropertiesService.getScriptProperties().setProperty(STAFF_CACHE_VERSION_KEY, String(version + 1));
 }
 
 function staffResponse_(payload) {

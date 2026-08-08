@@ -28,7 +28,7 @@ function renderWeekEvent(event) {
   `;
 }
 
-export function renderWeekView(anchorDate, events) {
+export function renderWeekView(anchorDate, events, { isRefreshing = false } = {}) {
   const days = getWeekDays(anchorDate);
   const grouped = groupEvents(events);
   const dayRows = days.map((date) => {
@@ -71,5 +71,5 @@ export function renderWeekView(anchorDate, events) {
       <div class="week-list">${dayRows}</div>
     </section>
   `;
-  return renderAppShell(content);
+  return renderAppShell(content, { isRefreshing });
 }
