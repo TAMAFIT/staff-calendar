@@ -17,8 +17,8 @@ const STAFF_TIMEZONE = "Asia/Tokyo";
 const STAFF_META_MARKER = "\n[TAMAFIT_STAFF_CALENDAR]\n";
 const STAFF_LIST_CACHE_SECONDS = 20;
 const STAFF_CACHE_VERSION_KEY = "tamafit_staff_calendar_cache_version";
-const STAFF_AUDIT_SPREADSHEET_KEY = "tamafit_staff_calendar_audit_spreadsheet_id";
-const STAFF_AUDIT_SHEET_NAME = "操作履歴";
+const STAFF_AUDIT_PREFIX = "tamafit_staff_calendar_audit_";
+const STAFF_AUDIT_MAX_ENTRIES = 200;
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -51,6 +51,13 @@ function doGet(e) {
 
     if (action === "staffCalendarHistory") {
       return staffResponse_({ status: "success", entries: staffListAudit_(params.limit) });
+    }
+
+    if (action === "staffCalendarAuditSetup") {
+      return staffResponse_({
+        status: "success",
+        historyReady: initializeStaffCalendarAudit()
+      });
     }
 
     return staffResponse_({ status: "error", message: "未対応の操作です。" });
@@ -347,83 +354,64 @@ function staffBumpCacheVersion_() {
   PropertiesService.getScriptProperties().setProperty(STAFF_CACHE_VERSION_KEY, String(version + 1));
 }
 
+function initializeStaffCalendarAudit() {
+  const properties = PropertiesService.getScriptProperties();
+  const probeKey = STAFF_AUDIT_PREFIX + "setup_probe";
+  properties.setProperty(probeKey, "ready");
+  properties.deleteProperty(probeKey);
+  return true;
+}
+
 function staffWriteAudit_(action, before, after) {
   try {
     const current = after || before;
     if (!current) return;
-    const sheet = staffAuditSheet_();
-    sheet.appendRow([
-      Utilities.formatDate(new Date(), STAFF_TIMEZONE, "yyyy-MM-dd HH:mm:ss"),
-      action,
-      "スタッフカレンダー",
-      current.id,
-      current.customerName,
-      STAFF_TRAINERS[current.trainerId] || "指定なし",
-      current.startAt,
-      current.endAt,
-      STAFF_TYPES[current.type] || current.type,
-      current.notes || "",
-      before && after ? staffAuditSummary_(before) : ""
-    ]);
+    const now = new Date();
+    const key = STAFF_AUDIT_PREFIX + now.getTime() + "_" + Utilities.getUuid();
+    const entry = {
+      timestamp: Utilities.formatDate(now, STAFF_TIMEZONE, "yyyy-MM-dd HH:mm:ss"),
+      action: action,
+      source: "スタッフカレンダー",
+      id: staffAuditText_(current.id, 300),
+      customerName: staffAuditText_(current.customerName, 300),
+      trainerName: STAFF_TRAINERS[current.trainerId] || "指定なし",
+      startAt: staffAuditText_(current.startAt, 40),
+      endAt: staffAuditText_(current.endAt, 40),
+      typeName: staffAuditText_(STAFF_TYPES[current.type] || current.type, 100),
+      notes: staffAuditText_(current.notes, 1000),
+      beforeSummary: before && after ? staffAuditText_(staffAuditSummary_(before), 1500) : ""
+    };
+    const properties = PropertiesService.getScriptProperties();
+    properties.setProperty(key, JSON.stringify(entry));
+    staffTrimAudit_(properties);
   } catch (error) {
     // A history write must not prevent the reservation itself from being saved.
     console.error("操作履歴の記録に失敗しました", error);
   }
 }
 
-function staffAuditSheet_() {
-  const properties = PropertiesService.getScriptProperties();
-  const spreadsheetId = properties.getProperty(STAFF_AUDIT_SPREADSHEET_KEY);
-  let spreadsheet = null;
-  if (spreadsheetId) {
-    try {
-      spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-    } catch (error) {
-      properties.deleteProperty(STAFF_AUDIT_SPREADSHEET_KEY);
-    }
-  }
+function staffAuditText_(value, maxLength) {
+  return String(value || "").slice(0, maxLength);
+}
 
-  if (!spreadsheet) {
-    spreadsheet = SpreadsheetApp.create("たまフィット スタッフカレンダー 操作履歴");
-    properties.setProperty(STAFF_AUDIT_SPREADSHEET_KEY, spreadsheet.getId());
-  }
+function staffAuditKeys_(properties) {
+  return properties.getKeys().filter(function(key) {
+    return key.indexOf(STAFF_AUDIT_PREFIX) === 0 && key !== STAFF_AUDIT_PREFIX + "setup_probe";
+  }).sort().reverse();
+}
 
-  let sheet = spreadsheet.getSheetByName(STAFF_AUDIT_SHEET_NAME);
-  if (!sheet) {
-    sheet = spreadsheet.getSheets()[0];
-    sheet.setName(STAFF_AUDIT_SHEET_NAME);
-  }
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(["操作日時", "操作", "操作元", "予約ID", "お客様・予定名", "担当", "開始", "終了", "種類", "メモ", "変更前"]);
-    sheet.setFrozenRows(1);
-  }
-  return sheet;
+function staffTrimAudit_(properties) {
+  staffAuditKeys_(properties).slice(STAFF_AUDIT_MAX_ENTRIES).forEach(function(key) {
+    properties.deleteProperty(key);
+  });
 }
 
 function staffListAudit_(limit) {
-  const spreadsheetId = PropertiesService.getScriptProperties().getProperty(STAFF_AUDIT_SPREADSHEET_KEY);
-  if (!spreadsheetId) return [];
-
   try {
-    const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-    const sheet = spreadsheet.getSheetByName(STAFF_AUDIT_SHEET_NAME);
-    if (!sheet || sheet.getLastRow() < 2) return [];
+    const properties = PropertiesService.getScriptProperties();
     const count = Math.min(Math.max(Number(limit) || 100, 1), 100);
-    const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 11).getDisplayValues();
-    return values.slice(-count).reverse().map(function(row) {
-      return {
-        timestamp: row[0],
-        action: row[1],
-        source: row[2],
-        id: row[3],
-        customerName: row[4],
-        trainerName: row[5],
-        startAt: row[6],
-        endAt: row[7],
-        typeName: row[8],
-        notes: row[9],
-        beforeSummary: row[10]
-      };
+    return staffAuditKeys_(properties).slice(0, count).map(function(key) {
+      return JSON.parse(properties.getProperty(key));
     });
   } catch (error) {
     console.error("操作履歴の読み込みに失敗しました", error);
