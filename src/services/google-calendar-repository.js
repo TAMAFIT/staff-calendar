@@ -26,6 +26,10 @@ function connectionError(message, cause) {
   return error;
 }
 
+function withMutationId(data, mutationId) {
+  return mutationId ? { ...data, mutationId } : data;
+}
+
 export class GoogleCalendarRepository extends CalendarRepository {
   constructor({ endpoint = GOOGLE_APPS_SCRIPT_URL, fetchImpl = (...args) => globalThis.fetch(...args) } = {}) {
     super();
@@ -91,17 +95,17 @@ export class GoogleCalendarRepository extends CalendarRepository {
   }
 
   async createEvent(input, { mutationId = "" } = {}) {
-    const response = await this.post("staffCalendarCreate", { event: input, mutationId });
+    const response = await this.post("staffCalendarCreate", withMutationId({ event: input }, mutationId));
     return response.event;
   }
 
   async updateEvent(id, input, { mutationId = "" } = {}) {
-    const response = await this.post("staffCalendarUpdate", { id, event: input, mutationId });
+    const response = await this.post("staffCalendarUpdate", withMutationId({ id, event: input }, mutationId));
     return response.event;
   }
 
   async deleteEvent(id, { mutationId = "" } = {}) {
-    await this.post("staffCalendarDelete", { id, mutationId });
+    await this.post("staffCalendarDelete", withMutationId({ id }, mutationId));
   }
 
   async findConflicts(candidate, excludeId = null) {
