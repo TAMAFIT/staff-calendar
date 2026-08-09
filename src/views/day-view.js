@@ -9,8 +9,9 @@ function renderDayEvent(event) {
   const type = getBookingType(event.type);
   const isCustomerReservation = ["member", "trial", "consultation"].includes(event.type);
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
+  const isPending = event.status === "pending";
   return `
-    <button class="day-event day-event--${color}" type="button" data-action="edit-booking" data-id="${event.id}">
+    <button class="day-event day-event--${color}${isPending ? " is-pending" : ""}" type="button" ${isPending ? "disabled" : `data-action="edit-booking" data-id="${event.id}"`}>
       <span class="day-event__time">
         <strong>${event.startAt.slice(11, 16)}</strong>
         <small>${event.endAt.slice(11, 16)}</small>
@@ -20,11 +21,12 @@ function renderDayEvent(event) {
         <span class="day-event__badges">
           <small>${escapeHtml(trainer?.name || "指定なし")}</small>
           <small>${escapeHtml(type.name)}</small>
+          ${isPending ? `<small class="sync-badge">同期中</small>` : ""}
         </span>
         <strong>${escapeHtml(isCustomerReservation ? `${event.customerName} 様` : event.customerName)}</strong>
         <span>${event.duration}分${event.notes ? `・${escapeHtml(event.notes)}` : ""}</span>
       </span>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      ${isPending ? `<span class="sync-spinner" aria-label="Googleカレンダーに同期中"></span>` : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`}
     </button>
   `;
 }
