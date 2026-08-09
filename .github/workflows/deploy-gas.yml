@@ -34,6 +34,17 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Check browser worker syntax
+        run: node --check service-worker.js
+
+      - name: Check Apps Script syntax
+        run: |
+          cp gas/Code.gs /tmp/tamafit-staff-calendar-gas.js
+          node --check /tmp/tamafit-staff-calendar-gas.js
+
       - name: Configure clasp credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
