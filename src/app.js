@@ -246,19 +246,11 @@ function showFormMessage(message) {
   if (message) element.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-function askForConfirmation({
-  eyebrow = "内容確認",
-  title,
-  summary,
-  confirmLabel = "保存する",
-  danger = false,
-  singleAction = false
-}) {
+function askForConfirmation({ eyebrow = "内容確認", title, summary, confirmLabel = "保存する", danger = false }) {
   return new Promise((resolve) => {
     const eyebrowElement = document.getElementById("confirmEyebrow");
     const titleElement = document.getElementById("confirmTitle");
     const summaryElement = document.getElementById("confirmSummary");
-    const actionsElement = confirmDialog.querySelector(".confirm-dialog__actions");
     const cancelButton = confirmDialog.querySelector("[data-dialog-cancel]");
     const confirmButton = confirmDialog.querySelector("[data-dialog-confirm]");
 
@@ -267,8 +259,6 @@ function askForConfirmation({
     summaryElement.innerHTML = summary;
     confirmButton.textContent = confirmLabel;
     confirmButton.classList.toggle("button--danger-solid", danger);
-    cancelButton.hidden = singleAction;
-    actionsElement.classList.toggle("is-single", singleAction);
 
     const finish = (result) => {
       cancelButton.removeEventListener("click", onCancel);
@@ -279,7 +269,7 @@ function askForConfirmation({
     };
     const onCancel = (event) => {
       event?.preventDefault();
-      finish(singleAction ? true : false);
+      finish(false);
     };
     const onConfirm = () => finish(true);
 
@@ -290,25 +280,50 @@ function askForConfirmation({
   });
 }
 
+function ensureSyncErrorDialog() {
+  let dialog = document.getElementById("syncErrorDialog");
+  if (dialog) return dialog;
+  document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="confirm-dialog sync-error-dialog" id="syncErrorDialog">
+      <div class="confirm-dialog__body">
+        <p class="eyebrow">同期エラー</p>
+        <h2 data-sync-error-title>Googleカレンダーに反映できませんでした</h2>
+        <div class="confirm-dialog__summary" data-sync-error-summary></div>
+        <div class="confirm-dialog__actions is-single">
+          <button class="button button--danger-solid button--wide" type="button" data-sync-error-close>確認しました</button>
+        </div>
+      </div>
+    </dialog>
+  `);
+  dialog = document.getElementById("syncErrorDialog");
+  const close = () => {
+    if (dialog.open) dialog.close();
+  };
+  dialog.addEventListener("click", (event) => {
+    if (event.target.closest("[data-sync-error-close]")) close();
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  return dialog;
+}
+
 function showSyncError({ title, event, error, rollbackMessage }) {
+  const dialog = ensureSyncErrorDialog();
   const reason = escapeHtml(error?.message || "Googleカレンダーとの通信に失敗しました。");
   const name = escapeHtml(event?.customerName || "予約");
   const date = escapeHtml(String(event?.startAt || "").slice(0, 10));
   const time = escapeHtml(String(event?.startAt || "").slice(11, 16));
-  void askForConfirmation({
-    eyebrow: "同期エラー",
-    title,
-    summary: `
-      <div class="sync-error-message">
-        <p><strong>${name}</strong>${date && time ? `<br>${date} ${time}` : ""}</p>
-        <p>${escapeHtml(rollbackMessage)}</p>
-        <p class="sync-error-message__reason">理由：${reason}</p>
-      </div>
-    `,
-    confirmLabel: "確認しました",
-    danger: true,
-    singleAction: true
-  });
+  dialog.querySelector("[data-sync-error-title]").textContent = title;
+  dialog.querySelector("[data-sync-error-summary]").innerHTML = `
+    <div class="sync-error-message">
+      <p><strong>${name}</strong>${date && time ? `<br>${date} ${time}` : ""}</p>
+      <p>${escapeHtml(rollbackMessage)}</p>
+      <p class="sync-error-message__reason">理由：${reason}</p>
+    </div>
+  `;
+  if (!dialog.open) dialog.showModal();
 }
 
 function rerenderCalendarIfVisible() {
