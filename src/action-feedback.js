@@ -1,4 +1,4 @@
-const TOAST_VISIBLE_MS = 900;
+const TOAST_VISIBLE_MS = 1100;
 let hideTimer = null;
 
 export function completionMessage(kind) {
@@ -17,27 +17,45 @@ function installStyles() {
     .action-feedback {
       position: fixed;
       left: 50%;
-      top: calc(72px + env(safe-area-inset-top));
+      top: calc(82px + env(safe-area-inset-top));
       z-index: 3000;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-width: 116px;
-      min-height: 44px;
-      padding: 10px 18px;
-      border-radius: 999px;
-      background: rgba(20, 45, 32, 0.94);
+      width: min(78vw, 360px);
+      min-width: 240px;
+      min-height: 68px;
+      padding: 16px 24px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 20px;
+      background: rgba(13, 143, 77, 0.97);
       color: #fff;
-      box-shadow: 0 8px 26px rgba(13, 49, 31, 0.22);
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: 0.02em;
-      line-height: 1;
+      box-shadow: 0 14px 38px rgba(8, 73, 40, 0.3);
+      font-size: 21px;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      line-height: 1.1;
       pointer-events: none;
       opacity: 0;
-      transform: translate3d(-50%, -10px, 0) scale(0.97);
-      transition: opacity 140ms ease-out, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translate3d(-50%, -14px, 0) scale(0.96);
+      transition: opacity 140ms ease-out, transform 190ms cubic-bezier(0.22, 1, 0.36, 1);
       will-change: opacity, transform;
+    }
+
+    .action-feedback::before {
+      content: "✓";
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      margin-right: 12px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.18);
+      font-size: 22px;
+      font-weight: 900;
+      line-height: 1;
+      flex: 0 0 auto;
     }
 
     .action-feedback.is-visible {
