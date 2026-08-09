@@ -1,4 +1,3 @@
-import { TRAINERS } from "./config.js";
 import { parseRoute, navigate } from "./router.js";
 import {
   OPERATORS,
@@ -34,7 +33,7 @@ const app = document.getElementById("app");
 const repository = createCalendarRepository();
 const pwaInstallDialog = document.getElementById("pwaInstallDialog");
 let lastCalendarHash = "";
-let backgroundRefreshToken = 0;
+let renderScheduled = false;
 
 function ensureOperatorDialog() {
   let dialog = document.getElementById("operatorDialog");
@@ -147,19 +146,10 @@ function renderCalendar(config) {
   if (config.view) saveLastView(config.view);
   syncInstallBanner();
 
-  const token = ++backgroundRefreshToken;
   if (!cached.isFresh) {
-    repository.refreshEvents(config.startDate, config.endDate)
-      .then(() => {
-        if (token !== backgroundRefreshToken) return;
-        const current = calendarRouteConfig(parseRoute());
-        if (!current || current.startDate !== config.startDate || current.endDate !== config.endDate) return;
-        app.innerHTML = current.render(repository.getCachedEvents(current.startDate, current.endDate).events);
-        syncInstallBanner();
-      })
-      .catch(() => {
-        // A read refresh never blocks the operator. Existing local data stays on screen.
-      });
+    repository.refreshEvents(config.startDate, config.endDate).catch(() => {
+      // Reads never block the operator. The last local snapshot remains visible.
+    });
   }
 }
 
@@ -199,10 +189,18 @@ function renderRoute() {
 
   if (route.name === "history") {
     app.innerHTML = renderHistoryView(repository.getCachedHistory?.() || []);
-    repository.refreshHistory?.().then(() => {
-      if (parseRoute().name === "history") app.innerHTML = renderHistoryView(repository.getCachedHistory());
-    }).catch(() => {});
+    repository.refreshHistory?.().catch(() => {});
   }
+}
+
+function scheduleLocalRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    const route = parseRoute();
+    if (["month", "week", "day", "history"].includes(route.name)) renderRoute();
+  });
 }
 
 function showFormMessage(message) {
@@ -256,7 +254,7 @@ function showSyncFailure(detail) {
     </div>
   `;
   if (!dialog.open) dialog.showModal();
-  renderRoute();
+  scheduleLocalRender();
 }
 
 function syncBookingTypeField() {
@@ -314,7 +312,14 @@ async function handleAction(button) {
     navigate(`booking/edit/${encodeURIComponent(button.dataset.id)}`);
     return;
   }
-  if (action === "back-to-calendar" || action === "back-from-form") {
+  if (action === "back-to-calendar") {
+    const destination = route.name === "history"
+      ? getReturnLocation(currentDateForRoute(route))
+      : (lastCalendarHash || `#/month/${monthRouteValue(currentDateForRoute(route))}`);
+    navigate(destination.replace(/^#\//, ""));
+    return;
+  }
+  if (action === "back-from-form") {
     navigate(getReturnLocation(currentDateForRoute(route)).replace(/^#\//, ""));
     return;
   }
@@ -376,7 +381,6 @@ function handleBookingSubmit(form) {
 
   if (eventId) repository.updateEventOptimistic(eventId, input);
   else repository.createEventOptimistic(input);
-
   navigate(`day/${date}`);
 }
 
@@ -425,13 +429,11 @@ app.addEventListener("click", (event) => {
   const button = event.target.closest("[data-action]");
   if (button) handleAction(button).catch(() => {});
 });
-
 app.addEventListener("submit", (event) => {
   if (event.target.id !== "bookingForm") return;
   event.preventDefault();
   try { handleBookingSubmit(event.target); } catch (error) { showFormMessage(error.message || "保存できませんでした。"); }
 });
-
 app.addEventListener("change", (event) => {
   if (event.target.id === "bookingType") syncBookingTypeField();
 });
@@ -440,7 +442,7 @@ window.addEventListener("hashchange", renderRoute);
 window.addEventListener("online", () => {
   repository.syncNow?.();
   const config = calendarRouteConfig(parseRoute());
-  if (config) repository.refreshEvents(config.startDate, config.endDate).then(renderRoute).catch(() => {});
+  if (config) repository.refreshEvents(config.startDate, config.endDate).catch(() => {});
 });
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -457,6 +459,7 @@ pwaInstallDialog?.addEventListener("click", (event) => {
 });
 
 repository.onSyncFailure?.(showSyncFailure);
+repository.onChange?.(scheduleLocalRender);
 
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));
@@ -467,13 +470,10 @@ async function startApp() {
   if (!window.location.hash) navigate(`month/${monthRouteValue(new Date())}`, { replace: true });
   else renderRoute();
 
-  // Warm a wide window in the background. The UI never waits for this request.
   const today = new Date();
   const start = toISODate(addMonths(today, -3));
   const end = toISODate(addMonths(today, 6));
-  repository.refreshEvents(start, end).then(() => {
-    if (["month", "week", "day"].includes(parseRoute().name)) renderRoute();
-  }).catch(() => {});
+  repository.refreshEvents(start, end).catch(() => {});
   repository.syncNow?.();
 }
 
