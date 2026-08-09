@@ -1,4 +1,20 @@
 import { LocalFirstCalendarRepository } from "./local-first-calendar-repository.js";
+import { addMonths, getMonthGrid, parseISODate, toISODate } from "../utils/date.js";
+
+const BROAD_PREFETCH_DAYS = 90;
+
+function rangeLengthDays(startDate, endDate) {
+  return Math.round((parseISODate(endDate).getTime() - parseISODate(startDate).getTime()) / 86_400_000);
+}
+
+function monthGridRange(anchorDate) {
+  const month = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+  const days = getMonthGrid(month);
+  return {
+    startDate: toISODate(days[0]),
+    endDate: toISODate(days.at(-1))
+  };
+}
 
 export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRepository {
   constructor(source, options = {}) {
@@ -17,10 +33,42 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     });
   }
 
-  async refreshEvents(startDate, endDate) {
+  async refreshOneRange(startDate, endDate) {
+    const cached = this.getCachedEvents(startDate, endDate);
+    if (cached.isFresh) return cached.events;
     const events = await super.refreshEvents(startDate, endDate);
     this.emitChange();
     return events;
+  }
+
+  async prefetchCurrentAndNextMonth() {
+    const now = new Date(this.now());
+    const ranges = [
+      monthGridRange(now),
+      monthGridRange(addMonths(now, 1))
+    ];
+
+    for (const range of ranges) {
+      try {
+        await this.refreshOneRange(range.startDate, range.endDate);
+      } catch {
+        // Prefetch is best-effort. A failed month must not block the app or the next month.
+      }
+    }
+
+    return this.getCachedEvents(ranges[0].startDate, ranges[1].endDate).events;
+  }
+
+  async refreshEvents(startDate, endDate) {
+    // The app used to request roughly nine months at startup. That made the first
+    // background read unnecessarily heavy and could leave future months looking empty.
+    // Treat broad startup requests as a hint to warm only this month and next month,
+    // one after the other. Any later month is fetched on demand when the user opens it.
+    if (rangeLengthDays(startDate, endDate) > BROAD_PREFETCH_DAYS) {
+      return this.prefetchCurrentAndNextMonth();
+    }
+
+    return this.refreshOneRange(startDate, endDate);
   }
 
   rollback(op, error) {
