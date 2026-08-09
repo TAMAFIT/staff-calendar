@@ -24,15 +24,14 @@ function renderEventChip(event) {
   const time = event.startAt.slice(11, 16);
   const displayName = Array.from(event.customerName.split(/[ 　]/)[0]).slice(0, 2).join("");
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
-  const isPending = event.status === "pending";
   return `
-    <span class="month-event month-event--${color}${isPending ? " is-pending" : ""}" title="${escapeAttribute(`${time} ${event.customerName}${isPending ? "（同期中）" : ""}`)}">
+    <span class="month-event month-event--${color}" title="${escapeAttribute(`${time} ${event.customerName}`)}">
       <b>${escapeHtml(time)}</b><span>${escapeHtml(displayName)}</span>
     </span>
   `;
 }
 
-export function renderMonthView(anchorDate, events, { isRefreshing = false } = {}) {
+export function renderMonthView(anchorDate, events) {
   const days = getMonthGrid(anchorDate);
   const eventsByDate = groupEvents(events);
   const currentMonth = anchorDate.getMonth();
@@ -97,5 +96,5 @@ export function renderMonthView(anchorDate, events, { isRefreshing = false } = {
     </section>
   `;
 
-  return renderAppShell(content, { isRefreshing });
+  return renderAppShell(content);
 }
