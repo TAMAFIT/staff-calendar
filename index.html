@@ -23,18 +23,6 @@
   <body>
     <div id="app" aria-live="polite"></div>
 
-    <dialog class="confirm-dialog" id="confirmDialog">
-      <div class="confirm-dialog__body">
-        <p class="eyebrow" id="confirmEyebrow">内容確認</p>
-        <h2 id="confirmTitle">この内容で保存しますか？</h2>
-        <div class="confirm-dialog__summary" id="confirmSummary"></div>
-        <div class="confirm-dialog__actions">
-          <button class="button button--quiet" type="button" data-dialog-cancel>戻る</button>
-          <button class="button button--primary" type="button" data-dialog-confirm>保存する</button>
-        </div>
-      </div>
-    </dialog>
-
     <dialog class="confirm-dialog pwa-install-dialog" id="pwaInstallDialog">
       <div class="confirm-dialog__body">
         <p class="eyebrow">iPhoneでアプリとして追加</p>
@@ -44,13 +32,12 @@
           <li>「ホーム画面に追加」を選ぶ</li>
           <li>右上の「追加」を押す</li>
         </ol>
-        <div class="confirm-dialog__actions">
+        <div class="confirm-dialog__actions is-single">
           <button class="button button--primary button--wide" type="button" data-pwa-dialog-close>わかりました</button>
         </div>
       </div>
     </dialog>
 
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./src/app.js"></script>
+    <script type="module" src="./src/local-first-app.js"></script>
   </body>
 </html>
