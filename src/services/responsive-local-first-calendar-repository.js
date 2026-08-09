@@ -2,6 +2,7 @@ import { LocalFirstCalendarRepository } from "./local-first-calendar-repository.
 import { addMonths, getMonthGrid, parseISODate, toISODate } from "../utils/date.js";
 
 const BROAD_PREFETCH_DAYS = 90;
+const RECURRING_INSTANCE_PREFIX = "recurring:";
 
 function rangeLengthDays(startDate, endDate) {
   return Math.round((parseISODate(endDate).getTime() - parseISODate(startDate).getTime()) / 86_400_000);
@@ -16,9 +17,46 @@ function monthGridRange(anchorDate) {
   };
 }
 
+function recurringInstanceId(event) {
+  return `${RECURRING_INSTANCE_PREFIX}${encodeURIComponent(event.id)}:${event.startAt}`;
+}
+
+export function normalizeRecurringInstances(events, knownSeriesIds = new Set()) {
+  const counts = new Map();
+  events.forEach((event) => counts.set(event.id, (counts.get(event.id) || 0) + 1));
+  counts.forEach((count, id) => {
+    if (count > 1) knownSeriesIds.add(id);
+  });
+
+  return events.map((event) => {
+    if (!knownSeriesIds.has(event.id)) return event;
+    return {
+      ...event,
+      calendarEventId: event.id,
+      id: recurringInstanceId(event),
+      isRecurring: true,
+      readOnly: true
+    };
+  });
+}
+
+function wrapRecurringAwareSource(source, knownSeriesIds) {
+  return new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === "listEvents") {
+        return async (...args) => normalizeRecurringInstances(await target.listEvents(...args), knownSeriesIds);
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+}
+
 export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRepository {
   constructor(source, options = {}) {
-    super(source, options);
+    const knownRecurringSeriesIds = new Set();
+    super(wrapRecurringAwareSource(source, knownRecurringSeriesIds), options);
+    this.knownRecurringSeriesIds = knownRecurringSeriesIds;
     this.changeListeners = new Set();
   }
 
