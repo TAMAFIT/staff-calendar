@@ -22,6 +22,10 @@ const STAFF_AUDIT_MAX_ENTRIES = 50;
 const STAFF_SNAPSHOT_PREFIX = "tamafit_staff_calendar_snapshot_";
 const STAFF_SNAPSHOT_INITIALIZED_KEY = "tamafit_staff_calendar_snapshot_initialized_at";
 const STAFF_SNAPSHOT_MAX_ENTRIES = 100;
+const STAFF_MUTATION_PREFIX = "tamafit_staff_calendar_mutation_";
+const STAFF_MUTATION_COUNT_KEY = "tamafit_staff_calendar_mutation_count";
+const STAFF_MUTATION_MAX_ENTRIES = 150;
+const STAFF_MUTATION_TRIM_INTERVAL = 25;
 const STAFF_TRAINERS = {
   tamai: "玉井",
   obayashi: "大林"
@@ -81,22 +85,28 @@ function doPost(e) {
 
     if (action === "staffCalendarCreate") {
       return staffResponse_(staffWithLock_(function() {
-        const event = staffCreateEvent_(data.event || {}, data.operatorId);
-        return { status: "success", event: event };
+        return staffRunMutationOnce_(data.mutationId, function() {
+          const event = staffCreateEvent_(data.event || {}, data.operatorId);
+          return { status: "success", event: event };
+        });
       }));
     }
 
     if (action === "staffCalendarUpdate") {
       return staffResponse_(staffWithLock_(function() {
-        const event = staffUpdateEvent_(data.id, data.event || {}, data.operatorId);
-        return { status: "success", event: event };
+        return staffRunMutationOnce_(data.mutationId, function() {
+          const event = staffUpdateEvent_(data.id, data.event || {}, data.operatorId);
+          return { status: "success", event: event };
+        });
       }));
     }
 
     if (action === "staffCalendarDelete") {
       return staffResponse_(staffWithLock_(function() {
-        staffDeleteEvent_(data.id, data.operatorId);
-        return { status: "success" };
+        return staffRunMutationOnce_(data.mutationId, function() {
+          staffDeleteEvent_(data.id, data.operatorId);
+          return { status: "success" };
+        });
       }));
     }
 
@@ -356,6 +366,62 @@ function staffWithLock_(callback) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function staffMutationKey_(mutationId) {
+  return STAFF_MUTATION_PREFIX + String(mutationId || "").slice(0, 180);
+}
+
+function staffRunMutationOnce_(mutationId, callback) {
+  const id = String(mutationId || "").trim();
+  if (!id) return callback();
+
+  const properties = PropertiesService.getScriptProperties();
+  const key = staffMutationKey_(id);
+  const saved = properties.getProperty(key);
+  if (saved) {
+    try {
+      const record = JSON.parse(saved);
+      if (record && record.result) return record.result;
+    } catch (error) {
+      properties.deleteProperty(key);
+    }
+  }
+
+  const result = callback();
+  properties.setProperty(key, JSON.stringify({
+    createdAt: Date.now(),
+    result: result
+  }));
+
+  const count = (Number(properties.getProperty(STAFF_MUTATION_COUNT_KEY)) || 0) + 1;
+  properties.setProperty(STAFF_MUTATION_COUNT_KEY, String(count));
+  if (count % STAFF_MUTATION_TRIM_INTERVAL === 0) staffTrimMutations_(properties);
+  return result;
+}
+
+function staffMutationKeys_(properties) {
+  return properties.getKeys().filter(function(key) {
+    return key.indexOf(STAFF_MUTATION_PREFIX) === 0 && key !== STAFF_MUTATION_COUNT_KEY;
+  });
+}
+
+function staffTrimMutations_(properties) {
+  const records = staffMutationKeys_(properties).map(function(key) {
+    try {
+      const value = JSON.parse(properties.getProperty(key) || "null");
+      return { key: key, createdAt: Number(value && value.createdAt || 0) };
+    } catch (error) {
+      properties.deleteProperty(key);
+      return null;
+    }
+  }).filter(function(item) { return item; });
+
+  records
+    .sort(function(a, b) { return b.createdAt - a.createdAt; })
+    .slice(STAFF_MUTATION_MAX_ENTRIES)
+    .forEach(function(item) { properties.deleteProperty(item.key); });
+  properties.setProperty(STAFF_MUTATION_COUNT_KEY, String(Math.min(records.length, STAFF_MUTATION_MAX_ENTRIES)));
 }
 
 function staffCacheVersion_() {
