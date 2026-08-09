@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v6";
+const CACHE_NAME = "tamafit-staff-calendar-v8";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -11,7 +11,8 @@ const APP_SHELL = [
   "./styles/calendar.css",
   "./styles/forms.css",
   "./styles/history.css",
-  "./app.bundle.js",
+  "./styles/sync.css",
+  "./src/app.js",
   "./service-worker.js"
 ];
 
@@ -29,6 +30,19 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+function cacheResponse(request, response, event) {
+  if (!response?.ok) return response;
+  const copy = response.clone();
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)));
+  return response;
+}
+
+function networkFirst(request, event, fallbackRequest = request) {
+  return fetch(request)
+    .then((response) => cacheResponse(fallbackRequest, response, event))
+    .catch(() => caches.match(fallbackRequest));
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -37,14 +51,18 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(
-      caches.match("./index.html")
-        .then((cached) => cached || fetch(request))
-    );
+    event.respondWith(networkFirst(request, event, "./index.html"));
+    return;
+  }
+
+  // Source modules and styles change frequently. Prefer the newest GitHub Pages copy,
+  // but fall back to the cached file when the device is offline.
+  if (request.destination === "script" || request.destination === "style") {
+    event.respondWith(networkFirst(request, event));
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request))
+    caches.match(request).then((cached) => cached || fetch(request).then((response) => cacheResponse(request, response, event)))
   );
 });

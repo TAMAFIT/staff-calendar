@@ -280,6 +280,73 @@ function askForConfirmation({ eyebrow = "内容確認", title, summary, confirmL
   });
 }
 
+function ensureSyncErrorDialog() {
+  let dialog = document.getElementById("syncErrorDialog");
+  if (dialog) return dialog;
+  document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="confirm-dialog sync-error-dialog" id="syncErrorDialog">
+      <div class="confirm-dialog__body">
+        <p class="eyebrow">同期エラー</p>
+        <h2 data-sync-error-title>Googleカレンダーに反映できませんでした</h2>
+        <div class="confirm-dialog__summary" data-sync-error-summary></div>
+        <div class="confirm-dialog__actions is-single">
+          <button class="button button--danger-solid button--wide" type="button" data-sync-error-close>確認しました</button>
+        </div>
+      </div>
+    </dialog>
+  `);
+  dialog = document.getElementById("syncErrorDialog");
+  const close = () => {
+    if (dialog.open) dialog.close();
+  };
+  dialog.addEventListener("click", (event) => {
+    if (event.target.closest("[data-sync-error-close]")) close();
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  return dialog;
+}
+
+function showSyncError({ title, event, error, rollbackMessage }) {
+  const dialog = ensureSyncErrorDialog();
+  const reason = escapeHtml(error?.message || "Googleカレンダーとの通信に失敗しました。");
+  const name = escapeHtml(event?.customerName || "予約");
+  const date = escapeHtml(String(event?.startAt || "").slice(0, 10));
+  const time = escapeHtml(String(event?.startAt || "").slice(11, 16));
+  dialog.querySelector("[data-sync-error-title]").textContent = title;
+  dialog.querySelector("[data-sync-error-summary]").innerHTML = `
+    <div class="sync-error-message">
+      <p><strong>${name}</strong>${date && time ? `<br>${date} ${time}` : ""}</p>
+      <p>${escapeHtml(rollbackMessage)}</p>
+      <p class="sync-error-message__reason">理由：${reason}</p>
+    </div>
+  `;
+  if (!dialog.open) dialog.showModal();
+}
+
+function rerenderCalendarIfVisible() {
+  const route = parseRoute();
+  if (["month", "week", "day"].includes(route.name)) {
+    void renderRoute();
+  }
+}
+
+function observeMutation(mutation, { title, rollbackMessage }) {
+  mutation.committed
+    .then(() => rerenderCalendarIfVisible())
+    .catch((error) => {
+      rerenderCalendarIfVisible();
+      showSyncError({
+        title,
+        event: mutation.event,
+        error,
+        rollbackMessage
+      });
+    });
+}
+
 function isStandaloneApp() {
   return window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true;
 }
@@ -503,16 +570,30 @@ async function handleAction(button) {
       danger: true
     });
     if (!confirmed) return;
-    await repository.deleteEvent(event.id);
+
+    const mutation = await repository.deleteEventOptimistic(event.id);
     navigate(`day/${event.startAt.slice(0, 10)}`);
     showToast("予約を削除しました", {
       duration: 8000,
       actionLabel: "元に戻す",
       onAction: async () => {
-        await repository.createEvent(reservationInputFromEvent(event));
+        try {
+          await mutation.committed;
+        } catch {
+          return;
+        }
+        const restore = repository.createEventOptimistic(reservationInputFromEvent(event));
         navigate(`day/${event.startAt.slice(0, 10)}`);
         showToast("予約を復元しました");
+        observeMutation(restore, {
+          title: "予約を復元できませんでした",
+          rollbackMessage: "復元用の仮予約を取り消しました。"
+        });
       }
+    });
+    observeMutation(mutation, {
+      title: "予約を削除できませんでした",
+      rollbackMessage: "削除前の予約を画面に戻しました。"
     });
   }
 }
@@ -542,14 +623,20 @@ async function handleBookingSubmit(form) {
     return;
   }
 
-  const conflicts = await repository.findConflicts(input, eventId);
-  if (conflicts.length) {
-    const conflict = conflicts[0];
+  const analysis = repository.analyzeBooking
+    ? await repository.analyzeBooking(input, eventId)
+    : {
+        conflicts: await repository.findConflicts(input, eventId),
+        bufferWarnings: await repository.findBufferWarnings(input, eventId)
+      };
+
+  if (analysis.conflicts.length) {
+    const conflict = analysis.conflicts[0];
     showFormMessage(`同じ担当者に ${conflict.startAt.slice(11, 16)}〜${conflict.endAt.slice(11, 16)} の予約があります。時間を変更してください。`);
     return;
   }
 
-  const bufferWarnings = await repository.findBufferWarnings(input, eventId);
+  const bufferWarnings = analysis.bufferWarnings;
   const bufferWarningSummary = bufferWarnings.length ? `
     <div class="booking-buffer-warning" role="note">
       <strong>前後30分の確認</strong>
@@ -578,13 +665,22 @@ async function handleBookingSubmit(form) {
   if (!confirmed) return;
 
   if (eventId) {
-    await repository.updateEvent(eventId, input);
+    const mutation = await repository.updateEventOptimistic(eventId, input);
+    navigate(`day/${date}`);
     showToast("予約を変更しました");
+    observeMutation(mutation, {
+      title: "予約の変更を保存できませんでした",
+      rollbackMessage: "変更前の予約内容に戻しました。"
+    });
   } else {
-    await repository.createEvent(input);
+    const mutation = repository.createEventOptimistic(input);
+    navigate(`day/${date}`);
     showToast("予約を登録しました");
+    observeMutation(mutation, {
+      title: "予約を登録できませんでした",
+      rollbackMessage: "画面上の仮予約を取り消しました。"
+    });
   }
-  navigate(`day/${date}`);
 }
 
 app.addEventListener("click", (event) => {
@@ -604,6 +700,10 @@ app.addEventListener("change", (event) => {
 });
 
 window.addEventListener("hashchange", renderRoute);
+window.addEventListener("online", () => {
+  const route = parseRoute();
+  if (["month", "week", "day"].includes(route.name)) void renderRoute({ forceRefresh: true });
+});
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   appState.installPrompt = event;

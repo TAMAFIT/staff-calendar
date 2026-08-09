@@ -14,7 +14,20 @@ function ensureConfigured(url) {
 
 function ensureSuccess(payload) {
   if (payload?.status === "success") return payload;
-  throw new Error(payload?.message || "Googleカレンダーとの通信に失敗しました。");
+  const error = new Error(payload?.message || "Googleカレンダーとの通信に失敗しました。");
+  error.retryable = false;
+  throw error;
+}
+
+function connectionError(message, cause, { retryable = true } = {}) {
+  const error = new Error(message);
+  error.retryable = retryable;
+  error.cause = cause;
+  return error;
+}
+
+function withMutationId(data, mutationId) {
+  return mutationId ? { ...data, mutationId } : data;
 }
 
 export class GoogleCalendarRepository extends CalendarRepository {
@@ -32,21 +45,44 @@ export class GoogleCalendarRepository extends CalendarRepository {
       if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
 
-    const response = await this.fetchImpl(url, { method: "GET", redirect: "follow" });
-    if (!response.ok) throw new Error("Googleカレンダーに接続できませんでした。");
+    let response;
+    try {
+      response = await this.fetchImpl(url, { method: "GET", redirect: "follow" });
+    } catch (error) {
+      throw connectionError("Googleカレンダーに接続できませんでした。", error);
+    }
+    if (!response.ok) throw connectionError("Googleカレンダーに接続できませんでした。");
     return ensureSuccess(await response.json());
   }
 
-  async post(action, data = {}) {
+  async post(action, data = {}, { retryOnce = Boolean(data.mutationId) } = {}) {
     ensureConfigured(this.endpoint);
-    const response = await this.fetchImpl(this.endpoint, {
-      method: "POST",
-      redirect: "follow",
-      // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
-      body: JSON.stringify({ action, operatorId: loadOperatorId(), ...data })
-    });
-    if (!response.ok) throw new Error("Googleカレンダーに接続できませんでした。");
-    return ensureSuccess(await response.json());
+    const body = JSON.stringify({ action, operatorId: loadOperatorId(), ...data });
+    const attempts = retryOnce ? 2 : 1;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const response = await this.fetchImpl(this.endpoint, {
+          method: "POST",
+          redirect: "follow",
+          // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
+          body
+        });
+        if (!response.ok) {
+          const transient = response.status === 429 || response.status >= 500;
+          if (attempt + 1 < attempts && transient) continue;
+          throw connectionError("Googleカレンダーに接続できませんでした。", null, { retryable: transient });
+        }
+        return ensureSuccess(await response.json());
+      } catch (error) {
+        if (error?.retryable === false) throw error;
+        if (attempt + 1 < attempts) continue;
+        if (error?.retryable) throw error;
+        throw connectionError("Googleカレンダーに接続できませんでした。", error);
+      }
+    }
+
+    throw connectionError("Googleカレンダーに接続できませんでした。");
   }
 
   async listEvents(startDate, endDate) {
@@ -59,18 +95,18 @@ export class GoogleCalendarRepository extends CalendarRepository {
     return response.event || null;
   }
 
-  async createEvent(input) {
-    const response = await this.post("staffCalendarCreate", { event: input });
+  async createEvent(input, { mutationId = "" } = {}) {
+    const response = await this.post("staffCalendarCreate", withMutationId({ event: input }, mutationId));
     return response.event;
   }
 
-  async updateEvent(id, input) {
-    const response = await this.post("staffCalendarUpdate", { id, event: input });
+  async updateEvent(id, input, { mutationId = "" } = {}) {
+    const response = await this.post("staffCalendarUpdate", withMutationId({ id, event: input }, mutationId));
     return response.event;
   }
 
-  async deleteEvent(id) {
-    await this.post("staffCalendarDelete", { id });
+  async deleteEvent(id, { mutationId = "" } = {}) {
+    await this.post("staffCalendarDelete", withMutationId({ id }, mutationId));
   }
 
   async findConflicts(candidate, excludeId = null) {

@@ -1,0 +1,73 @@
+.month-event.is-pending,
+.week-event.is-pending,
+.day-event.is-pending {
+  position: relative;
+}
+
+.month-event.is-pending {
+  opacity: 0.68;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 3px,
+    rgba(255, 255, 255, 0.58) 3px,
+    rgba(255, 255, 255, 0.58) 6px
+  );
+}
+
+.week-event.is-pending,
+.day-event.is-pending {
+  opacity: 0.78;
+}
+
+.day-event.is-pending {
+  cursor: default;
+}
+
+.day-event.is-pending:disabled {
+  color: inherit;
+}
+
+.sync-badge {
+  background: #eef5f0 !important;
+  color: #53665a !important;
+}
+
+.sync-spinner {
+  align-self: center;
+  justify-self: center;
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--green-100);
+  border-top-color: var(--green-700);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+.confirm-dialog__actions.is-single {
+  grid-template-columns: 1fr;
+}
+
+.sync-error-message {
+  padding: 10px 2px;
+}
+
+.sync-error-message p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.sync-error-message p + p {
+  margin-top: 12px;
+}
+
+.sync-error-message__reason {
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--red-100);
+  color: var(--red-700) !important;
+  font-size: 12px !important;
+  font-weight: 800;
+}
