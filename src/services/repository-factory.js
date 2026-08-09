@@ -1,7 +1,7 @@
 import { GoogleCalendarRepository } from "./google-calendar-repository.js";
 import { LocalCalendarRepository } from "./local-calendar-repository.js";
 import { CachedCalendarRepository } from "./cached-calendar-repository.js";
-import { LocalFirstCalendarRepository } from "./local-first-calendar-repository.js";
+import { ResponsiveLocalFirstCalendarRepository } from "./responsive-local-first-calendar-repository.js";
 
 export function createCalendarRepository() {
   // preview.html remains a pure local mock.
@@ -13,7 +13,7 @@ export function createCalendarRepository() {
 
   // Production is local-first: the UI reads and writes the device store immediately.
   // Google Calendar is only the background synchronization target.
-  return new LocalFirstCalendarRepository(new GoogleCalendarRepository(), {
+  return new ResponsiveLocalFirstCalendarRepository(new GoogleCalendarRepository(), {
     storageKey: "tamafit_staff_calendar_local_first_v1"
   });
 }
