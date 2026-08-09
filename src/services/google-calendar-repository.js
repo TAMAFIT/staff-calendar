@@ -19,9 +19,9 @@ function ensureSuccess(payload) {
   throw error;
 }
 
-function connectionError(message, cause) {
+function connectionError(message, cause, { retryable = true } = {}) {
   const error = new Error(message);
-  error.retryable = true;
+  error.retryable = retryable;
   error.cause = cause;
   return error;
 }
@@ -69,8 +69,9 @@ export class GoogleCalendarRepository extends CalendarRepository {
           body
         });
         if (!response.ok) {
-          if (attempt + 1 < attempts && response.status >= 500) continue;
-          throw connectionError("Googleカレンダーに接続できませんでした。");
+          const transient = response.status === 429 || response.status >= 500;
+          if (attempt + 1 < attempts && transient) continue;
+          throw connectionError("Googleカレンダーに接続できませんでした。", null, { retryable: transient });
         }
         return ensureSuccess(await response.json());
       } catch (error) {
