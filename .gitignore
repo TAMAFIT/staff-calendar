@@ -1,3 +1,4 @@
 node_modules/
 qa/
-
+.clasp.json
+.clasprc.json
