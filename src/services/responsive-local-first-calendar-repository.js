@@ -24,6 +24,24 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
   }
 
   rollback(op, error) {
+    const laterForSameTarget = this.outbox.slice(1).filter((item) => item.targetId === op.targetId);
+
+    // If a local create is rejected, every queued edit/delete that still points to
+    // that temporary event is impossible too. Drop the dependency chain together.
+    if (op.kind === "create" && laterForSameTarget.length) {
+      const dependentIds = new Set(laterForSameTarget.map((item) => item.id));
+      this.outbox = this.outbox.filter((item) => !dependentIds.has(item.id));
+    }
+
+    // A rejected update may already have been superseded by another complete update.
+    // Keep the latest local state and let the later mutation become authoritative.
+    if (op.kind === "update" && laterForSameTarget.length) {
+      this.outbox = this.outbox.filter((item) => item.id !== op.id);
+      this.persist();
+      this.emitChange();
+      return;
+    }
+
     super.rollback(op, error);
     this.emitChange();
   }
