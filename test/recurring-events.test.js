@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeRecurringInstances } from "../src/services/responsive-local-first-calendar-repository.js";
+import {
+  ResponsiveLocalFirstCalendarRepository,
+  normalizeRecurringInstances
+} from "../src/services/responsive-local-first-calendar-repository.js";
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); }
+  };
+}
 
 function event(startAt) {
   return {
@@ -44,4 +56,34 @@ test("once a series is known, a one-day refresh still keeps the occurrence ident
   assert.equal(result.calendarEventId, "series-123@google.com");
   assert.match(result.id, /^recurring:/);
   assert.match(result.id, /2026-09-07T10:00:00$/);
+});
+
+test("local-first refresh does not collapse weekly Google Calendar occurrences", async () => {
+  const source = {
+    async listEvents() {
+      return [
+        event("2026-08-03T10:00:00"),
+        event("2026-08-10T10:00:00"),
+        event("2026-08-17T10:00:00"),
+        event("2026-08-24T10:00:00")
+      ];
+    },
+    async getEvent() { return null; },
+    async createEvent() { throw new Error("unused"); },
+    async updateEvent() { throw new Error("unused"); },
+    async deleteEvent() { throw new Error("unused"); },
+    async listHistory() { return []; }
+  };
+
+  const repo = new ResponsiveLocalFirstCalendarRepository(source, {
+    storage: memoryStorage(),
+    now: () => new Date(2026, 7, 9, 12, 0, 0).getTime()
+  });
+
+  await repo.refreshEvents("2026-08-01", "2026-08-31");
+  const cached = repo.getCachedEvents("2026-08-01", "2026-08-31").events;
+
+  assert.equal(cached.length, 4);
+  assert.equal(new Set(cached.map((item) => item.id)).size, 4);
+  assert.ok(cached.every((item) => item.isRecurring === true));
 });
