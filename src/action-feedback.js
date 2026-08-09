@@ -17,7 +17,7 @@ function installStyles() {
     .action-feedback {
       position: fixed;
       left: 50%;
-      bottom: calc(28px + env(safe-area-inset-bottom));
+      top: calc(72px + env(safe-area-inset-top));
       z-index: 3000;
       display: inline-flex;
       align-items: center;
@@ -35,7 +35,7 @@ function installStyles() {
       line-height: 1;
       pointer-events: none;
       opacity: 0;
-      transform: translate3d(-50%, 12px, 0) scale(0.97);
+      transform: translate3d(-50%, -10px, 0) scale(0.97);
       transition: opacity 140ms ease-out, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
       will-change: opacity, transform;
     }
