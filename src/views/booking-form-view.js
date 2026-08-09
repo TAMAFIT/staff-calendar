@@ -22,7 +22,7 @@ export function renderBookingForm({ event = null, defaultDate, defaultTrainerId 
       <div class="form-heading">
         <p class="eyebrow">${isEditing ? "予約内容の変更" : "新しい予約"}</p>
         <h1>${isEditing ? "予約を編集" : "予約を追加"}</h1>
-        <p>必要な内容だけ入力して、Googleカレンダーと同じ感覚で登録できます。</p>
+        <p>保存するとすぐ画面に反映され、Googleカレンダーとの同期は裏側で行われます。</p>
       </div>
 
       <form class="booking-form" id="bookingForm" data-event-id="${escapeAttribute(event?.id || "")}">
@@ -83,7 +83,7 @@ export function renderBookingForm({ event = null, defaultDate, defaultTrainerId 
 
         <div class="form-actions">
           ${isEditing ? `<button class="button button--danger" type="button" data-action="delete-booking" data-id="${escapeAttribute(event.id)}">予約を削除</button>` : ""}
-          <button class="button button--primary ${isEditing ? "" : "button--wide"}" type="submit">予約内容を確認する</button>
+          <button class="button button--primary ${isEditing ? "" : "button--wide"}" type="submit">${isEditing ? "変更を保存" : "予約する"}</button>
         </div>
       </form>
     </section>

@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v8";
+const CACHE_NAME = "tamafit-staff-calendar-v9";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,7 +12,7 @@ const APP_SHELL = [
   "./styles/forms.css",
   "./styles/history.css",
   "./styles/sync.css",
-  "./src/app.js",
+  "./src/local-first-app.js",
   "./service-worker.js"
 ];
 
@@ -55,8 +55,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Source modules and styles change frequently. Prefer the newest GitHub Pages copy,
-  // but fall back to the cached file when the device is offline.
+  // Code and styles update from the network when available, but remain usable offline.
   if (request.destination === "script" || request.destination === "style") {
     event.respondWith(networkFirst(request, event));
     return;

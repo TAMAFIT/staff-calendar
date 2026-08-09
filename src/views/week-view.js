@@ -15,19 +15,18 @@ function groupEvents(events) {
 function renderWeekEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
   const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
-  const isPending = event.status === "pending";
   return `
-    <div class="week-event week-event--${color}${isPending ? " is-pending" : ""}">
+    <div class="week-event week-event--${color}">
       <time>${event.startAt.slice(11, 16)}</time>
       <span class="week-event__main">
         <strong>${escapeHtml(event.customerName)}</strong>
-        <small>${escapeHtml(trainer?.name || "指定なし")}・${event.duration}分${isPending ? "・同期中" : ""}</small>
+        <small>${escapeHtml(trainer?.name || "指定なし")}・${event.duration}分</small>
       </span>
     </div>
   `;
 }
 
-export function renderWeekView(anchorDate, events, { isRefreshing = false } = {}) {
+export function renderWeekView(anchorDate, events) {
   const days = getWeekDays(anchorDate);
   const grouped = groupEvents(events);
   const dayRows = days.map((date) => {
@@ -74,5 +73,5 @@ export function renderWeekView(anchorDate, events, { isRefreshing = false } = {}
       </button>
     </section>
   `;
-  return renderAppShell(content, { isRefreshing });
+  return renderAppShell(content);
 }
