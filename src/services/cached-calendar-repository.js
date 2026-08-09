@@ -106,7 +106,12 @@ export class CachedCalendarRepository extends CalendarRepository {
     const generation = this.cacheGeneration;
     const request = this.source.listEvents(startDate, endDate)
       .then((events) => {
-        if (generation !== this.cacheGeneration) return eventsForRange(events, startDate, endDate);
+        if (generation !== this.cacheGeneration) {
+          // A local mutation happened while this request was in flight. Never let the
+          // older server response visually roll back the optimistic state.
+          return this.getCachedEvents(startDate, endDate)?.events
+            || eventsForRange(events, startDate, endDate);
+        }
         const snapshot = {
           startDate,
           endDate,
@@ -137,17 +142,28 @@ export class CachedCalendarRepository extends CalendarRepository {
   }
 
   updateCachedEvents({ removeIds = [], upsertEvents = [] } = {}) {
+    // Invalidate any server read that started before this mutation. Its response may be
+    // correct for the moment it started but stale relative to the optimistic change.
+    this.cacheGeneration += 1;
+
     const idsToRemove = new Set(removeIds.filter(Boolean));
     upsertEvents.forEach((event) => {
       if (event?.id) idsToRemove.add(event.id);
     });
 
     let snapshots = this.snapshots.map((snapshot) => {
+      let changed = snapshot.events.some((event) => idsToRemove.has(event.id));
       const nextEvents = snapshot.events.filter((event) => !idsToRemove.has(event.id));
+
       upsertEvents.forEach((event) => {
         const date = eventDate(event);
-        if (date && rangeContains(snapshot, date, date)) nextEvents.push(event);
+        if (date && rangeContains(snapshot, date, date)) {
+          nextEvents.push(event);
+          changed = true;
+        }
       });
+
+      if (!changed) return snapshot;
       return {
         ...snapshot,
         events: nextEvents.sort((a, b) => a.startAt.localeCompare(b.startAt)),
