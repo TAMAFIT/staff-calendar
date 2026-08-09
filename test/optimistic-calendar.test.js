@@ -116,6 +116,72 @@ test("optimistic create appears immediately and is replaced by the server event"
   assert.equal(saved[0].status, "confirmed");
 });
 
+test("an older in-flight refresh cannot visually overwrite an optimistic mutation", async () => {
+  const original = event();
+  const source = new FakeSource([original]);
+  const repository = new CachedCalendarRepository(source, { storage: memoryStorage() });
+  await repository.refreshEvents("2026-08-10", "2026-08-10");
+
+  let resolveList;
+  source.listEvents = () => new Promise((resolve) => {
+    source.listCalls += 1;
+    resolveList = resolve;
+  });
+
+  let resolveCreate;
+  source.createImpl = (value) => new Promise((resolve) => {
+    resolveCreate = () => resolve(event({ id: "server-created", ...value, lastUpdated: 9 }));
+  });
+
+  const refresh = repository.refreshEvents("2026-08-10", "2026-08-10");
+  const mutation = repository.createEventOptimistic(input({
+    customerName: "新規 予約",
+    startAt: "2026-08-10T12:00:00",
+    endAt: "2026-08-10T13:00:00"
+  }));
+
+  resolveList([original]);
+  const rendered = await refresh;
+  assert.equal(rendered.length, 2);
+  assert.equal(rendered.some((item) => item.status === "pending"), true);
+
+  resolveCreate();
+  await mutation.committed;
+});
+
+test("mutating one date does not mark an unrelated stale snapshot fresh", async () => {
+  let now = 1_000;
+  const source = new FakeSource([event()]);
+  const repository = new CachedCalendarRepository(source, {
+    storage: memoryStorage(),
+    now: () => now,
+    ttlMs: 20_000
+  });
+
+  await repository.refreshEvents("2026-08-10", "2026-08-10");
+  source.events = [event({
+    id: "september-event",
+    startAt: "2026-09-10T10:00:00",
+    endAt: "2026-09-10T11:00:00"
+  })];
+  await repository.refreshEvents("2026-09-10", "2026-09-10");
+  now += 60_000;
+
+  let resolveCreate;
+  source.createImpl = (value) => new Promise((resolve) => {
+    resolveCreate = () => resolve(event({ id: "august-created", ...value }));
+  });
+  const mutation = repository.createEventOptimistic(input({
+    customerName: "8月 新規",
+    startAt: "2026-08-10T12:00:00",
+    endAt: "2026-08-10T13:00:00"
+  }));
+
+  assert.equal(repository.getCachedEvents("2026-09-10", "2026-09-10").isFresh, false);
+  resolveCreate();
+  await mutation.committed;
+});
+
 test("failed optimistic create removes the temporary reservation", async () => {
   const source = new FakeSource([]);
   source.createImpl = async () => { throw new Error("重複予約"); };
