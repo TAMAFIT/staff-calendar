@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v6";
+const CACHE_NAME = "tamafit-staff-calendar-v7";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -11,7 +11,8 @@ const APP_SHELL = [
   "./styles/calendar.css",
   "./styles/forms.css",
   "./styles/history.css",
-  "./app.bundle.js",
+  "./styles/sync.css",
+  "./src/app.js",
   "./service-worker.js"
 ];
 
@@ -38,13 +39,29 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      caches.match("./index.html")
-        .then((cached) => cached || fetch(request))
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy)));
+          }
+          return response;
+        })
+        .catch(() => caches.match("./index.html"))
     );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request))
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
+      return fetch(request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)));
+        }
+        return response;
+      });
+    })
   );
 });
