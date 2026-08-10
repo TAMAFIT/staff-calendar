@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ResponsiveLocalFirstCalendarRepository } from "../src/services/responsive-local-first-calendar-repository.js";
-import { addMonths, getMonthGrid, toISODate } from "../src/utils/date.js";
+import {
+  ResponsiveLocalFirstCalendarRepository,
+  normalizeCalendarReadRange
+} from "../src/services/responsive-local-first-calendar-repository.js";
+import { addMonths, toISODate } from "../src/utils/date.js";
 
 function memoryStorage() {
   const values = new Map();
@@ -13,8 +16,9 @@ function memoryStorage() {
 }
 
 function monthRange(date) {
-  const days = getMonthGrid(new Date(date.getFullYear(), date.getMonth(), 1));
-  return [toISODate(days[0]), toISODate(days.at(-1))];
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  return [toISODate(first), toISODate(last)];
 }
 
 class Source {
@@ -37,6 +41,18 @@ class Source {
   async deleteEvent() { throw new Error("unused"); }
   async listHistory() { return []; }
 }
+
+test("a 42-day month grid is normalized to that calendar month only", () => {
+  assert.deepEqual(
+    normalizeCalendarReadRange("2026-08-30", "2026-10-10"),
+    { startDate: "2026-09-01", endDate: "2026-09-30" }
+  );
+
+  assert.deepEqual(
+    normalizeCalendarReadRange("2026-09-13", "2026-09-19"),
+    { startDate: "2026-09-13", endDate: "2026-09-19" }
+  );
+});
 
 test("a broad startup refresh warms only current month then next month, sequentially", async () => {
   const source = new Source();

@@ -1,8 +1,9 @@
 import { LocalFirstCalendarRepository } from "./local-first-calendar-repository.js";
-import { addMonths, getMonthGrid, parseISODate, toISODate } from "../utils/date.js";
+import { addMonths, parseISODate, toISODate } from "../utils/date.js";
 import { historySemanticKey } from "../history-data.js";
 
 const BROAD_PREFETCH_DAYS = 90;
+const MONTH_GRID_SPAN_DAYS = 41;
 const RECURRING_INSTANCE_PREFIX = "recurring:";
 const MAX_HISTORY = 50;
 
@@ -10,13 +11,28 @@ function rangeLengthDays(startDate, endDate) {
   return Math.round((parseISODate(endDate).getTime() - parseISODate(startDate).getTime()) / 86_400_000);
 }
 
-function monthGridRange(anchorDate) {
-  const month = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
-  const days = getMonthGrid(month);
+function monthDataRange(anchorDate) {
+  const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+  const last = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
   return {
-    startDate: toISODate(days[0]),
-    endDate: toISODate(days.at(-1))
+    startDate: toISODate(first),
+    endDate: toISODate(last)
   };
+}
+
+export function normalizeCalendarReadRange(startDate, endDate) {
+  const start = parseISODate(startDate);
+  const end = parseISODate(endDate);
+  const looksLikeMonthGrid = (
+    rangeLengthDays(startDate, endDate) === MONTH_GRID_SPAN_DAYS
+    && start.getDay() === 0
+    && end.getDay() === 6
+  );
+
+  if (!looksLikeMonthGrid) return { startDate, endDate };
+
+  const anchor = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  return monthDataRange(anchor);
 }
 
 function recurringInstanceId(event) {
@@ -103,6 +119,11 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     });
   }
 
+  getCachedEvents(startDate, endDate) {
+    const range = normalizeCalendarReadRange(startDate, endDate);
+    return super.getCachedEvents(range.startDate, range.endDate);
+  }
+
   ensureHistoryIds() {
     let changed = false;
     this.history = this.history.map((entry, index) => {
@@ -160,8 +181,8 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
   async prefetchCurrentAndNextMonth() {
     const now = new Date(this.now());
     const ranges = [
-      monthGridRange(now),
-      monthGridRange(addMonths(now, 1))
+      monthDataRange(now),
+      monthDataRange(addMonths(now, 1))
     ];
 
     for (const range of ranges) {
@@ -184,7 +205,8 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
       return this.prefetchCurrentAndNextMonth();
     }
 
-    return this.refreshOneRange(startDate, endDate);
+    const range = normalizeCalendarReadRange(startDate, endDate);
+    return this.refreshOneRange(range.startDate, range.endDate);
   }
 
   async refreshHistory() {
