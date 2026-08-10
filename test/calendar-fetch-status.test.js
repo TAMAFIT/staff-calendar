@@ -4,6 +4,7 @@ import {
   calendarRangeFromRequest,
   calendarRouteAnchor,
   calendarRouteLabel,
+  calendarRouteRange,
   hasCachedCoverageForRoute,
   rangeMatchesCalendarRoute
 } from "../src/calendar-fetch-status.js";
@@ -46,6 +47,17 @@ test("calendar routes map to a stable anchor date", () => {
   assert.equal(calendarRouteAnchor("#/history"), "");
 });
 
+test("month and week routes expose their full visible date ranges", () => {
+  assert.deepEqual(calendarRouteRange("#/month/2026-09"), {
+    startDate: "2026-08-30",
+    endDate: "2026-10-10"
+  });
+  assert.deepEqual(calendarRouteRange("#/week/2026-09-13"), {
+    startDate: "2026-09-13",
+    endDate: "2026-09-19"
+  });
+});
+
 test("loading copy names the month that was already opened", () => {
   assert.equal(calendarRouteLabel("#/month/2026-09"), "9月");
   assert.equal(calendarRouteLabel("#/month/2026-12"), "12月");
@@ -62,7 +74,7 @@ test("only a request covering the visible calendar route is relevant", () => {
   assert.equal(rangeMatchesCalendarRoute(augustGrid, "#/week/2026-09-13"), false);
 });
 
-test("a never-fetched month is distinguished from a cached month", () => {
+test("partial neighboring coverage does not make an unfetched month look loaded", () => {
   const storage = memoryStorage({
     [COVERAGE_KEY]: JSON.stringify([
       { startDate: "2026-07-26", endDate: "2026-09-05", fetchedAt: 12345 }
@@ -70,8 +82,17 @@ test("a never-fetched month is distinguished from a cached month", () => {
   });
 
   assert.equal(hasCachedCoverageForRoute(storage, "#/month/2026-08"), true);
+  assert.equal(hasCachedCoverageForRoute(storage, "#/month/2026-09"), false);
+});
+
+test("full cached coverage suppresses the large initial loader", () => {
+  const storage = memoryStorage({
+    [COVERAGE_KEY]: JSON.stringify([
+      { startDate: "2026-08-30", endDate: "2026-10-10", fetchedAt: 12345 }
+    ])
+  });
+
   assert.equal(hasCachedCoverageForRoute(storage, "#/month/2026-09"), true);
-  assert.equal(hasCachedCoverageForRoute(storage, "#/month/2026-10"), false);
 });
 
 test("invalid or zero-timestamp coverage is treated as not loaded", () => {
