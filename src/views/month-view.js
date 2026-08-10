@@ -1,4 +1,5 @@
 import { MONTH_EVENT_LIMIT, TRAINERS } from "../config.js";
+import { renderRecentHistory } from "../history-ui.js";
 import {
   WEEKDAYS_SHORT,
   formatMonthTitle,
@@ -31,7 +32,7 @@ function renderEventChip(event) {
   `;
 }
 
-export function renderMonthView(anchorDate, events) {
+export function renderMonthView(anchorDate, events, history = []) {
   const days = getMonthGrid(anchorDate);
   const eventsByDate = groupEvents(events);
   const currentMonth = anchorDate.getMonth();
@@ -85,14 +86,12 @@ export function renderMonthView(anchorDate, events) {
         <div class="month-grid">${calendarCells}</div>
       </div>
 
+      ${renderRecentHistory(history)}
+
       <div class="calendar-legend" aria-label="担当トレーナーの色分け">
         ${TRAINERS.map((trainer) => `<span><i class="legend-dot legend-dot--${trainer.color}"></i>${escapeHtml(trainer.name)}</span>`).join("")}
         <span><i class="legend-dot legend-dot--amber"></i>体験</span>
       </div>
-      <button class="history-link" type="button" data-action="open-history">
-        操作履歴をみる
-        <span>追加・変更・削除の記録</span>
-      </button>
     </section>
   `;
 
