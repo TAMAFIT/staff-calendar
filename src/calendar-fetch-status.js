@@ -58,9 +58,8 @@ export function calendarRouteRange(hash) {
   const month = value.match(/^#\/month\/(\d{4})-(\d{2})/);
   if (month) {
     const first = new Date(Date.UTC(Number(month[1]), Number(month[2]) - 1, 1));
-    const start = new Date(first.getTime() - (first.getUTCDay() * DAY_MS));
-    const end = new Date(start.getTime() + (41 * DAY_MS));
-    return { startDate: formatDateUtc(start), endDate: formatDateUtc(end) };
+    const last = new Date(Date.UTC(Number(month[1]), Number(month[2]), 0));
+    return { startDate: formatDateUtc(first), endDate: formatDateUtc(last) };
   }
 
   const week = value.match(/^#\/week\/(\d{4}-\d{2}-\d{2})/);
@@ -86,9 +85,9 @@ export function calendarRouteLabel(hash) {
 }
 
 export function rangeMatchesCalendarRoute(range, hash) {
-  const anchor = calendarRouteAnchor(hash);
-  if (!anchor || !range?.startDate || !range?.endDate) return false;
-  return range.startDate <= anchor && anchor <= range.endDate;
+  const routeRange = calendarRouteRange(hash);
+  if (!routeRange || !range?.startDate || !range?.endDate) return false;
+  return range.startDate <= routeRange.startDate && range.endDate >= routeRange.endDate;
 }
 
 function readCoverage(storage) {
