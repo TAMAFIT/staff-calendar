@@ -3,6 +3,7 @@ const INITIAL_SHOW_DELAY_MS = 80;
 const REFRESH_SHOW_DELAY_MS = 350;
 const SLOW_LOAD_MS = 8_000;
 const COVERAGE_STORAGE_KEY = "tamafit_staff_calendar_local_first_v1:coverage";
+const DAY_MS = 86_400_000;
 
 function parseDateUtc(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return null;
@@ -10,11 +11,15 @@ function parseDateUtc(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function formatDateUtc(date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function rangeDays(startDate, endDate) {
   const start = parseDateUtc(startDate);
   const end = parseDateUtc(endDate);
   if (!start || !end) return Infinity;
-  return Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  return Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
 }
 
 export function calendarRangeFromRequest(input, init = {}) {
@@ -48,6 +53,29 @@ export function calendarRouteAnchor(hash) {
   return dated ? dated[1] : "";
 }
 
+export function calendarRouteRange(hash) {
+  const value = String(hash || "");
+  const month = value.match(/^#\/month\/(\d{4})-(\d{2})/);
+  if (month) {
+    const first = new Date(Date.UTC(Number(month[1]), Number(month[2]) - 1, 1));
+    const start = new Date(first.getTime() - (first.getUTCDay() * DAY_MS));
+    const end = new Date(start.getTime() + (41 * DAY_MS));
+    return { startDate: formatDateUtc(start), endDate: formatDateUtc(end) };
+  }
+
+  const week = value.match(/^#\/week\/(\d{4}-\d{2}-\d{2})/);
+  if (week) {
+    const anchor = parseDateUtc(week[1]);
+    if (!anchor) return null;
+    const start = new Date(anchor.getTime() - (anchor.getUTCDay() * DAY_MS));
+    const end = new Date(start.getTime() + (6 * DAY_MS));
+    return { startDate: formatDateUtc(start), endDate: formatDateUtc(end) };
+  }
+
+  const day = value.match(/^#\/day\/(\d{4}-\d{2}-\d{2})/);
+  return day ? { startDate: day[1], endDate: day[1] } : null;
+}
+
 export function calendarRouteLabel(hash) {
   const value = String(hash || "");
   const month = value.match(/^#\/month\/(\d{4})-(\d{2})/);
@@ -73,10 +101,12 @@ function readCoverage(storage) {
 }
 
 export function hasCachedCoverageForRoute(storage, hash) {
-  const anchor = calendarRouteAnchor(hash);
-  if (!anchor) return false;
+  const routeRange = calendarRouteRange(hash);
+  if (!routeRange) return false;
   return readCoverage(storage).some((item) => (
-    item?.startDate <= anchor && item?.endDate >= anchor && Number(item?.fetchedAt || 0) > 0
+    item?.startDate <= routeRange.startDate
+    && item?.endDate >= routeRange.endDate
+    && Number(item?.fetchedAt || 0) > 0
   ));
 }
 
@@ -291,7 +321,6 @@ export function installCalendarFetchStatus({
     }
 
     const initial = !hasCachedCoverageForRoute(storageRef, locationRef.hash);
-    const desiredMode = initial ? "initial" : "refresh";
     const desiredClass = initial ? "is-large" : "is-compact";
 
     if (indicator.classList.contains("is-visible") && indicator.classList.contains(desiredClass)) return;
@@ -302,7 +331,7 @@ export function installCalendarFetchStatus({
       showTimer = null;
       if (!relevantRangeExists()) return;
       const stillInitial = !hasCachedCoverageForRoute(storageRef, locationRef.hash);
-      show(stillInitial ? "initial" : desiredMode);
+      show(stillInitial ? "initial" : "refresh");
     }, initial ? INITIAL_SHOW_DELAY_MS : REFRESH_SHOW_DELAY_MS);
   };
 
