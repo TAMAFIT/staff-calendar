@@ -30,4 +30,8 @@ export class CalendarRepository {
   async listHistory() {
     throw new Error("listHistory must be implemented");
   }
+
+  async deleteHistory() {
+    throw new Error("deleteHistory must be implemented");
+  }
 }
