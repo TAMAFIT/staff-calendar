@@ -1,4 +1,5 @@
 import { TRAINERS } from "../config.js";
+import { renderRecentHistory } from "../history-ui.js";
 import { formatShortDay, formatWeekRange, getWeekDays, isToday, toISODate } from "../utils/date.js";
 import { escapeHtml } from "../utils/html.js";
 import { renderAppShell } from "./app-shell.js";
@@ -26,7 +27,7 @@ function renderWeekEvent(event) {
   `;
 }
 
-export function renderWeekView(anchorDate, events) {
+export function renderWeekView(anchorDate, events, history = []) {
   const days = getWeekDays(anchorDate);
   const grouped = groupEvents(events);
   const dayRows = days.map((date) => {
@@ -67,10 +68,7 @@ export function renderWeekView(anchorDate, events) {
       </div>
 
       <div class="week-list">${dayRows}</div>
-      <button class="history-link" type="button" data-action="open-history">
-        操作履歴をみる
-        <span>追加・変更・削除の記録</span>
-      </button>
+      ${renderRecentHistory(history)}
     </section>
   `;
   return renderAppShell(content);

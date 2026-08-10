@@ -34,6 +34,8 @@ const repository = createCalendarRepository();
 const pwaInstallDialog = document.getElementById("pwaInstallDialog");
 let lastCalendarHash = "";
 let renderScheduled = false;
+let historyOrganizeMode = false;
+let historyRefreshInFlight = false;
 
 function ensureOperatorDialog() {
   let dialog = document.getElementById("operatorDialog");
@@ -101,7 +103,7 @@ function calendarRouteConfig(route) {
     return {
       startDate: toISODate(days[0]),
       endDate: toISODate(days.at(-1)),
-      render: (events) => renderMonthView(anchor, events),
+      render: (events, history) => renderMonthView(anchor, events, history),
       view: "month"
     };
   }
@@ -111,7 +113,7 @@ function calendarRouteConfig(route) {
     return {
       startDate: toISODate(days[0]),
       endDate: toISODate(days.at(-1)),
-      render: (events) => renderWeekView(anchor, events),
+      render: (events, history) => renderWeekView(anchor, events, history),
       view: "week"
     };
   }
@@ -142,7 +144,8 @@ function getReturnLocation(fallbackDate = new Date()) {
 
 function renderCalendar(config) {
   const cached = repository.getCachedEvents(config.startDate, config.endDate);
-  app.innerHTML = config.render(cached.events);
+  const history = repository.getCachedHistory?.() || [];
+  app.innerHTML = config.render(cached.events, history);
   if (config.view) saveLastView(config.view);
   syncInstallBanner();
 
@@ -151,6 +154,30 @@ function renderCalendar(config) {
       // Reads never block the operator. The last local snapshot remains visible.
     });
   }
+}
+
+function syncHistorySelectionBar() {
+  const selected = [...app.querySelectorAll("[data-history-select]:checked")];
+  const count = app.querySelector("[data-history-selected-count]");
+  const deleteButton = app.querySelector('[data-action="delete-history-selected"]');
+  if (count) count.textContent = String(selected.length);
+  if (deleteButton) deleteButton.disabled = selected.length === 0;
+}
+
+function renderHistoryScreen({ refresh = false } = {}) {
+  app.innerHTML = renderHistoryView(repository.getCachedHistory?.() || [], { organizing: historyOrganizeMode });
+  syncHistorySelectionBar();
+
+  if (!refresh || historyRefreshInFlight || typeof repository.refreshHistory !== "function") return;
+  historyRefreshInFlight = true;
+  repository.refreshHistory()
+    .then(() => {
+      if (parseRoute().name !== "history") return;
+      app.innerHTML = renderHistoryView(repository.getCachedHistory?.() || [], { organizing: historyOrganizeMode });
+      syncHistorySelectionBar();
+    })
+    .catch(() => {})
+    .finally(() => { historyRefreshInFlight = false; });
 }
 
 function renderRoute() {
@@ -188,8 +215,7 @@ function renderRoute() {
   }
 
   if (route.name === "history") {
-    app.innerHTML = renderHistoryView(repository.getCachedHistory?.() || []);
-    repository.refreshHistory?.().catch(() => {});
+    renderHistoryScreen({ refresh: true });
   }
 }
 
@@ -199,7 +225,11 @@ function scheduleLocalRender() {
   requestAnimationFrame(() => {
     renderScheduled = false;
     const route = parseRoute();
-    if (["month", "week", "day", "history"].includes(route.name)) renderRoute();
+    if (route.name === "history") {
+      renderHistoryScreen({ refresh: false });
+      return;
+    }
+    if (["month", "week", "day"].includes(route.name)) renderRoute();
   });
 }
 
@@ -255,6 +285,59 @@ function showSyncFailure(detail) {
   `;
   if (!dialog.open) dialog.showModal();
   scheduleLocalRender();
+}
+
+function ensureHistoryDeleteDialog() {
+  let dialog = document.getElementById("historyDeleteDialog");
+  if (dialog) return dialog;
+  document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="confirm-dialog" id="historyDeleteDialog">
+      <div class="confirm-dialog__body">
+        <p class="eyebrow">操作履歴の整理</p>
+        <h2 data-history-delete-title>履歴を削除しますか？</h2>
+        <div class="confirm-dialog__summary" data-history-delete-summary></div>
+        <div class="confirm-dialog__actions">
+          <button class="button button--secondary" type="button" data-history-delete-cancel>キャンセル</button>
+          <button class="button button--danger-solid" type="button" data-history-delete-confirm>履歴を削除</button>
+        </div>
+      </div>
+    </dialog>
+  `);
+  return document.getElementById("historyDeleteDialog");
+}
+
+function confirmHistoryDeletion(historyIds) {
+  const ids = (Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean);
+  if (!ids.length) return Promise.resolve(false);
+  const dialog = ensureHistoryDeleteDialog();
+  const entries = repository.getCachedHistory?.().filter((entry) => ids.includes(String(entry.historyId || ""))) || [];
+  const title = ids.length === 1 ? "この操作履歴を削除しますか？" : `${ids.length}件の操作履歴を削除しますか？`;
+  const names = entries.map((entry) => entry.customerName).filter(Boolean).slice(0, 3);
+  dialog.querySelector("[data-history-delete-title]").textContent = title;
+  dialog.querySelector("[data-history-delete-summary]").innerHTML = `
+    ${names.length ? `<p><strong>${escapeHtml(names.join("、"))}${entries.length > 3 ? " ほか" : ""}</strong></p>` : ""}
+    <p>履歴だけを削除します。Googleカレンダーの予約自体は削除されません。</p>
+  `;
+
+  return new Promise((resolve) => {
+    const finish = (accepted) => {
+      dialog.removeEventListener("click", onClick);
+      dialog.removeEventListener("cancel", onCancel);
+      if (dialog.open) dialog.close();
+      resolve(accepted);
+    };
+    const onClick = (event) => {
+      if (event.target.closest("[data-history-delete-confirm]")) finish(true);
+      if (event.target.closest("[data-history-delete-cancel]")) finish(false);
+    };
+    const onCancel = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+    dialog.addEventListener("click", onClick);
+    dialog.addEventListener("cancel", onCancel);
+    dialog.showModal();
+  });
 }
 
 function syncBookingTypeField() {
@@ -313,6 +396,7 @@ async function handleAction(button) {
     return;
   }
   if (action === "back-to-calendar") {
+    historyOrganizeMode = false;
     const destination = route.name === "history"
       ? getReturnLocation(currentDateForRoute(route))
       : (lastCalendarHash || `#/month/${monthRouteValue(currentDateForRoute(route))}`);
@@ -324,8 +408,34 @@ async function handleAction(button) {
     return;
   }
   if (action === "open-history") {
+    historyOrganizeMode = false;
     rememberReturnLocation();
     navigate("history");
+    return;
+  }
+  if (action === "history-organize") {
+    historyOrganizeMode = true;
+    renderHistoryScreen({ refresh: false });
+    return;
+  }
+  if (action === "history-organize-cancel") {
+    historyOrganizeMode = false;
+    renderHistoryScreen({ refresh: false });
+    return;
+  }
+  if (action === "delete-history-one") {
+    const id = button.dataset.historyId;
+    if (!id || !await confirmHistoryDeletion([id])) return;
+    repository.deleteHistoryOptimistic?.([id]);
+    renderHistoryScreen({ refresh: false });
+    return;
+  }
+  if (action === "delete-history-selected") {
+    const ids = [...app.querySelectorAll("[data-history-select]:checked")].map((input) => input.value).filter(Boolean);
+    if (!ids.length || !await confirmHistoryDeletion(ids)) return;
+    historyOrganizeMode = false;
+    repository.deleteHistoryOptimistic?.(ids);
+    renderHistoryScreen({ refresh: false });
     return;
   }
   if (action === "reload") {
@@ -436,11 +546,14 @@ app.addEventListener("submit", (event) => {
 });
 app.addEventListener("change", (event) => {
   if (event.target.id === "bookingType") syncBookingTypeField();
+  if (event.target.matches?.("[data-history-select]")) syncHistorySelectionBar();
 });
 
 window.addEventListener("hashchange", renderRoute);
 window.addEventListener("online", () => {
   repository.syncNow?.();
+  repository.syncHistoryDeletes?.();
+  repository.refreshHistory?.().then(scheduleLocalRender).catch(() => {});
   const config = calendarRouteConfig(parseRoute());
   if (config) repository.refreshEvents(config.startDate, config.endDate).catch(() => {});
 });
@@ -474,6 +587,8 @@ async function startApp() {
   const start = toISODate(addMonths(today, -3));
   const end = toISODate(addMonths(today, 6));
   repository.refreshEvents(start, end).catch(() => {});
+  repository.refreshHistory?.().then(scheduleLocalRender).catch(() => {});
+  repository.syncHistoryDeletes?.();
   repository.syncNow?.();
 }
 

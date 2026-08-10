@@ -128,4 +128,11 @@ export class GoogleCalendarRepository extends CalendarRepository {
     const response = await this.get("staffCalendarHistory", { limit });
     return response.entries || [];
   }
+
+  async deleteHistory(historyIds) {
+    const response = await this.post("staffCalendarHistoryDelete", {
+      historyIds: (Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean)
+    }, { retryOnce: false });
+    return response.deleted || [];
+  }
 }

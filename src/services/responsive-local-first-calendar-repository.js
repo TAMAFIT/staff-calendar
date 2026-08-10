@@ -1,8 +1,10 @@
 import { LocalFirstCalendarRepository } from "./local-first-calendar-repository.js";
 import { addMonths, getMonthGrid, parseISODate, toISODate } from "../utils/date.js";
+import { historySemanticKey } from "../history-data.js";
 
 const BROAD_PREFETCH_DAYS = 90;
 const RECURRING_INSTANCE_PREFIX = "recurring:";
+const MAX_HISTORY = 50;
 
 function rangeLengthDays(startDate, endDate) {
   return Math.round((parseISODate(endDate).getTime() - parseISODate(startDate).getTime()) / 86_400_000);
@@ -19,6 +21,27 @@ function monthGridRange(anchorDate) {
 
 function recurringInstanceId(event) {
   return `${RECURRING_INSTANCE_PREFIX}${encodeURIComponent(event.id)}:${event.startAt}`;
+}
+
+function readStoredSet(storage, key) {
+  try {
+    const value = JSON.parse(storage?.getItem(key) || "[]");
+    return new Set(Array.isArray(value) ? value.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeStoredSet(storage, key, set) {
+  try {
+    storage?.setItem(key, JSON.stringify([...set]));
+  } catch {
+    // The in-memory tombstones still keep this session consistent.
+  }
+}
+
+function isLocalHistoryId(value) {
+  return String(value || "").startsWith("local:") || String(value || "").startsWith("local-legacy:");
 }
 
 export function normalizeRecurringInstances(events, knownSeriesIds = new Set()) {
@@ -58,6 +81,15 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     super(wrapRecurringAwareSource(source, knownRecurringSeriesIds), options);
     this.knownRecurringSeriesIds = knownRecurringSeriesIds;
     this.changeListeners = new Set();
+    this.historyDeleteSyncing = false;
+    this.historyHiddenIdsKey = `${this.storageKey}:history-hidden-ids`;
+    this.historyHiddenMutationIdsKey = `${this.storageKey}:history-hidden-mutations`;
+    this.historyHiddenSemanticKeysKey = `${this.storageKey}:history-hidden-semantic`;
+    this.hiddenHistoryIds = readStoredSet(this.storage, this.historyHiddenIdsKey);
+    this.hiddenHistoryMutationIds = readStoredSet(this.storage, this.historyHiddenMutationIdsKey);
+    this.hiddenHistorySemanticKeys = readStoredSet(this.storage, this.historyHiddenSemanticKeysKey);
+    this.ensureHistoryIds();
+    queueMicrotask(() => this.syncHistoryDeletes());
   }
 
   onChange(listener) {
@@ -69,6 +101,52 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     this.changeListeners.forEach((listener) => {
       try { listener(); } catch { /* UI listeners must not affect synchronization */ }
     });
+  }
+
+  ensureHistoryIds() {
+    let changed = false;
+    this.history = this.history.map((entry, index) => {
+      if (entry?.historyId) return entry;
+      changed = true;
+      const key = encodeURIComponent(historySemanticKey(entry)).slice(0, 180);
+      return { ...entry, historyId: `local-legacy:${key}:${index}` };
+    });
+    if (changed) this.persist();
+  }
+
+  persistHistoryDeletionState() {
+    writeStoredSet(this.storage, this.historyHiddenIdsKey, this.hiddenHistoryIds);
+    writeStoredSet(this.storage, this.historyHiddenMutationIdsKey, this.hiddenHistoryMutationIds);
+    writeStoredSet(this.storage, this.historyHiddenSemanticKeysKey, this.hiddenHistorySemanticKeys);
+  }
+
+  markNewestLocalHistory(mutationId) {
+    const latest = this.history[0];
+    if (!latest?.localOnly) return;
+    this.history[0] = {
+      ...latest,
+      historyId: `local:${mutationId}`,
+      mutationId
+    };
+    this.persist();
+  }
+
+  createEventOptimistic(input) {
+    const result = super.createEventOptimistic(input);
+    this.markNewestLocalHistory(result.mutationId);
+    return result;
+  }
+
+  updateEventOptimistic(id, input) {
+    const result = super.updateEventOptimistic(id, input);
+    this.markNewestLocalHistory(result.mutationId);
+    return result;
+  }
+
+  deleteEventOptimistic(id) {
+    const result = super.deleteEventOptimistic(id);
+    this.markNewestLocalHistory(result.mutationId);
+    return result;
   }
 
   async refreshOneRange(startDate, endDate) {
@@ -109,6 +187,93 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     return this.refreshOneRange(startDate, endDate);
   }
 
+  async refreshHistory() {
+    const serverEntries = await this.source.listHistory(MAX_HISTORY);
+
+    serverEntries.forEach((entry) => {
+      const mutationMatch = entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId));
+      const semantic = historySemanticKey(entry);
+      const semanticMatch = this.hiddenHistorySemanticKeys.has(semantic);
+      if (!mutationMatch && !semanticMatch) return;
+
+      if (entry.historyId) this.hiddenHistoryIds.add(String(entry.historyId));
+      if (mutationMatch) this.hiddenHistoryMutationIds.delete(String(entry.mutationId));
+      if (semanticMatch) this.hiddenHistorySemanticKeys.delete(semantic);
+    });
+
+    const localPending = this.history.filter((entry) => {
+      if (!entry.localOnly) return false;
+      if (entry.historyId && this.hiddenHistoryIds.has(String(entry.historyId))) return false;
+      if (entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId))) return false;
+      if (this.hiddenHistorySemanticKeys.has(historySemanticKey(entry))) return false;
+      return true;
+    });
+
+    const seen = new Set();
+    this.history = [...serverEntries, ...localPending]
+      .filter((entry) => {
+        if (entry.historyId && this.hiddenHistoryIds.has(String(entry.historyId))) return false;
+        if (entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId))) return false;
+        if (this.hiddenHistorySemanticKeys.has(historySemanticKey(entry))) return false;
+
+        const key = entry.mutationId
+          ? `mutation:${entry.mutationId}`
+          : `semantic:${historySemanticKey(entry)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, MAX_HISTORY);
+
+    this.persist();
+    this.persistHistoryDeletionState();
+    this.emitChange();
+    queueMicrotask(() => this.syncHistoryDeletes());
+    return this.history;
+  }
+
+  deleteHistoryOptimistic(historyIds) {
+    const ids = new Set((Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean));
+    if (!ids.size) return [];
+
+    const removed = this.history.filter((entry) => ids.has(String(entry.historyId || "")));
+    removed.forEach((entry) => {
+      const historyId = String(entry.historyId || "");
+      if (!isLocalHistoryId(historyId)) {
+        this.hiddenHistoryIds.add(historyId);
+      } else if (entry.mutationId) {
+        this.hiddenHistoryMutationIds.add(String(entry.mutationId));
+      } else {
+        this.hiddenHistorySemanticKeys.add(historySemanticKey(entry));
+      }
+    });
+
+    this.history = this.history.filter((entry) => !ids.has(String(entry.historyId || "")));
+    this.persist();
+    this.persistHistoryDeletionState();
+    this.emitChange();
+    queueMicrotask(() => this.syncHistoryDeletes());
+    return removed;
+  }
+
+  async syncHistoryDeletes() {
+    if (this.historyDeleteSyncing || !this.hiddenHistoryIds.size) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    if (typeof this.source.deleteHistory !== "function") return;
+
+    this.historyDeleteSyncing = true;
+    const ids = [...this.hiddenHistoryIds];
+    try {
+      await this.source.deleteHistory(ids);
+      ids.forEach((id) => this.hiddenHistoryIds.delete(id));
+      this.persistHistoryDeletionState();
+    } catch {
+      // Keep tombstones and retry on the next refresh/online cycle.
+    } finally {
+      this.historyDeleteSyncing = false;
+    }
+  }
+
   rollback(op, error) {
     const laterForSameTarget = this.outbox.slice(1).filter((item) => item.targetId === op.targetId);
 
@@ -133,7 +298,11 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
   }
 
   async syncNow() {
-    if (this.syncing || !this.outbox.length) return;
+    if (this.syncing) return;
+    if (!this.outbox.length) {
+      this.syncHistoryDeletes();
+      return;
+    }
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     this.syncing = true;
     clearTimeout(this.retryTimer);
@@ -163,6 +332,11 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
       }
     } finally {
       this.syncing = false;
+    }
+
+    this.syncHistoryDeletes();
+    if (!this.outbox.length && (this.hiddenHistoryMutationIds.size || this.hiddenHistorySemanticKeys.size)) {
+      this.refreshHistory().catch(() => {});
     }
   }
 }
