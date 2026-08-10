@@ -1,5 +1,8 @@
 const TRACKED_RANGE_MAX_DAYS = 70;
-const SHOW_DELAY_MS = 220;
+const INITIAL_SHOW_DELAY_MS = 80;
+const REFRESH_SHOW_DELAY_MS = 350;
+const SLOW_LOAD_MS = 8_000;
+const COVERAGE_STORAGE_KEY = "tamafit_staff_calendar_local_first_v1:coverage";
 
 function parseDateUtc(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return null;
@@ -45,10 +48,36 @@ export function calendarRouteAnchor(hash) {
   return dated ? dated[1] : "";
 }
 
+export function calendarRouteLabel(hash) {
+  const value = String(hash || "");
+  const month = value.match(/^#\/month\/(\d{4})-(\d{2})/);
+  if (month) return `${Number(month[2])}月`;
+  if (/^#\/week\//.test(value)) return "この週";
+  if (/^#\/day\//.test(value)) return "この日";
+  return "予定";
+}
+
 export function rangeMatchesCalendarRoute(range, hash) {
   const anchor = calendarRouteAnchor(hash);
   if (!anchor || !range?.startDate || !range?.endDate) return false;
   return range.startDate <= anchor && anchor <= range.endDate;
+}
+
+function readCoverage(storage) {
+  try {
+    const value = JSON.parse(storage?.getItem(COVERAGE_STORAGE_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+export function hasCachedCoverageForRoute(storage, hash) {
+  const anchor = calendarRouteAnchor(hash);
+  if (!anchor) return false;
+  return readCoverage(storage).some((item) => (
+    item?.startDate <= anchor && item?.endDate >= anchor && Number(item?.fetchedAt || 0) > 0
+  ));
 }
 
 function ensureStyles(documentRef) {
@@ -59,13 +88,47 @@ function ensureStyles(documentRef) {
     .calendar-fetch-status {
       position: fixed;
       z-index: 95;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .calendar-fetch-status.is-visible {
+      opacity: 1;
+    }
+
+    .calendar-fetch-status.is-large {
+      top: calc(var(--safe-top, 0px) + 190px);
+      left: 50%;
+      display: flex;
+      width: min(82vw, 370px);
+      min-height: 176px;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 22px;
+      border: 1px solid rgba(13, 143, 77, 0.16);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.94);
+      color: var(--green-950, #084d2d);
+      box-shadow: 0 14px 38px rgba(20, 64, 38, 0.18);
+      backdrop-filter: blur(10px);
+      flex-direction: column;
+      text-align: center;
+      transform: translate(-50%, -8px) scale(0.985);
+    }
+
+    .calendar-fetch-status.is-large.is-visible {
+      transform: translate(-50%, 0) scale(1);
+    }
+
+    .calendar-fetch-status.is-compact {
       top: calc(var(--safe-top, 0px) + 76px);
       right: 14px;
       display: inline-flex;
-      align-items: center;
-      gap: 8px;
       min-height: 34px;
+      align-items: center;
       padding: 7px 11px;
+      gap: 8px;
       border: 1px solid rgba(13, 143, 77, 0.14);
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.96);
@@ -73,30 +136,72 @@ function ensureStyles(documentRef) {
       box-shadow: 0 5px 16px rgba(20, 64, 38, 0.14);
       font-size: 11px;
       font-weight: 900;
-      opacity: 0;
-      pointer-events: none;
       transform: translateY(-5px);
-      transition: opacity 150ms ease, transform 150ms ease;
       white-space: nowrap;
     }
 
-    .calendar-fetch-status.is-visible {
-      opacity: 1;
+    .calendar-fetch-status.is-compact.is-visible {
       transform: translateY(0);
     }
 
     .calendar-fetch-status__spinner {
-      width: 14px;
-      height: 14px;
-      flex: 0 0 14px;
-      border: 2px solid var(--green-100, #d9f0e3);
+      flex: 0 0 auto;
+      border: 3px solid var(--green-100, #d9f0e3);
       border-top-color: var(--green-700, #0d8f4d);
       border-radius: 50%;
       animation: calendar-fetch-spin 0.72s linear infinite;
     }
 
+    .calendar-fetch-status.is-large .calendar-fetch-status__spinner {
+      width: 44px;
+      height: 44px;
+      margin-bottom: 17px;
+      border-width: 4px;
+    }
+
+    .calendar-fetch-status.is-compact .calendar-fetch-status__spinner {
+      width: 14px;
+      height: 14px;
+    }
+
+    .calendar-fetch-status__copy {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .calendar-fetch-status.is-large .calendar-fetch-status__title {
+      font-size: 19px;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      line-height: 1.35;
+    }
+
+    .calendar-fetch-status.is-large .calendar-fetch-status__detail {
+      margin-top: 7px;
+      color: var(--ink-soft, #627067);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .calendar-fetch-status.is-compact .calendar-fetch-status__title {
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .calendar-fetch-status.is-compact .calendar-fetch-status__detail {
+      display: none;
+    }
+
     @keyframes calendar-fetch-spin {
       to { transform: rotate(360deg); }
+    }
+
+    @media (max-height: 650px) {
+      .calendar-fetch-status.is-large {
+        top: calc(var(--safe-top, 0px) + 150px);
+        min-height: 154px;
+      }
     }
   `;
   documentRef.head.appendChild(style);
@@ -111,7 +216,13 @@ function ensureIndicator(documentRef) {
   indicator.className = "calendar-fetch-status";
   indicator.setAttribute("role", "status");
   indicator.setAttribute("aria-live", "polite");
-  indicator.innerHTML = `<span class="calendar-fetch-status__spinner" aria-hidden="true"></span><span>予定を読み込み中</span>`;
+  indicator.innerHTML = `
+    <span class="calendar-fetch-status__spinner" aria-hidden="true"></span>
+    <span class="calendar-fetch-status__copy">
+      <strong class="calendar-fetch-status__title"></strong>
+      <span class="calendar-fetch-status__detail"></span>
+    </span>
+  `;
   documentRef.body.appendChild(indicator);
   return indicator;
 }
@@ -119,7 +230,8 @@ function ensureIndicator(documentRef) {
 export function installCalendarFetchStatus({
   globalRef = globalThis,
   documentRef = globalThis.document,
-  locationRef = globalThis.location
+  locationRef = globalThis.location,
+  storageRef = globalThis.localStorage
 } = {}) {
   if (!globalRef?.fetch || !documentRef || !locationRef) return () => {};
   if (globalRef.__tamafitCalendarFetchStatusInstalled) return () => {};
@@ -130,25 +242,68 @@ export function installCalendarFetchStatus({
   const activeRanges = new Map();
   let requestId = 0;
   let showTimer = null;
+  let slowTimer = null;
+
+  const title = indicator.querySelector(".calendar-fetch-status__title");
+  const detail = indicator.querySelector(".calendar-fetch-status__detail");
+
+  const clearTimers = () => {
+    clearTimeout(showTimer);
+    clearTimeout(slowTimer);
+    showTimer = null;
+    slowTimer = null;
+  };
 
   const hide = () => {
-    clearTimeout(showTimer);
-    showTimer = null;
-    indicator.classList.remove("is-visible");
+    clearTimers();
+    indicator.classList.remove("is-visible", "is-large", "is-compact");
+  };
+
+  const relevantRangeExists = () => [...activeRanges.values()]
+    .some((range) => rangeMatchesCalendarRoute(range, locationRef.hash));
+
+  const show = (mode) => {
+    const label = calendarRouteLabel(locationRef.hash);
+    indicator.classList.remove("is-large", "is-compact");
+    indicator.classList.add(mode === "initial" ? "is-large" : "is-compact");
+
+    if (mode === "initial") {
+      title.textContent = `${label}の予定を読み込んでいます`;
+      detail.textContent = "カレンダーは移動済みです。そのままお待ちください";
+      slowTimer = setTimeout(() => {
+        if (!indicator.classList.contains("is-visible") || !relevantRangeExists()) return;
+        title.textContent = "予定の読み込みに時間がかかっています";
+        detail.textContent = "通信状況によって時間がかかる場合があります";
+      }, SLOW_LOAD_MS);
+    } else {
+      title.textContent = "最新の予定を確認中";
+      detail.textContent = "";
+    }
+
+    indicator.classList.add("is-visible");
   };
 
   const syncVisibility = () => {
-    const relevant = [...activeRanges.values()].some((range) => rangeMatchesCalendarRoute(range, locationRef.hash));
-    if (!relevant) {
+    const routeAnchor = calendarRouteAnchor(locationRef.hash);
+    if (!routeAnchor || !relevantRangeExists()) {
       hide();
       return;
     }
-    if (indicator.classList.contains("is-visible") || showTimer) return;
+
+    const initial = !hasCachedCoverageForRoute(storageRef, locationRef.hash);
+    const desiredMode = initial ? "initial" : "refresh";
+    const desiredClass = initial ? "is-large" : "is-compact";
+
+    if (indicator.classList.contains("is-visible") && indicator.classList.contains(desiredClass)) return;
+
+    clearTimers();
+    indicator.classList.remove("is-visible", "is-large", "is-compact");
     showTimer = setTimeout(() => {
       showTimer = null;
-      const stillRelevant = [...activeRanges.values()].some((range) => rangeMatchesCalendarRoute(range, locationRef.hash));
-      indicator.classList.toggle("is-visible", stillRelevant);
-    }, SHOW_DELAY_MS);
+      if (!relevantRangeExists()) return;
+      const stillInitial = !hasCachedCoverageForRoute(storageRef, locationRef.hash);
+      show(stillInitial ? "initial" : desiredMode);
+    }, initial ? INITIAL_SHOW_DELAY_MS : REFRESH_SHOW_DELAY_MS);
   };
 
   const trackedFetch = (input, init) => {
