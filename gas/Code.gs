@@ -273,6 +273,7 @@ function staffSerializeEvent_(event) {
     status: "confirmed",
     source: "google-calendar",
     isManaged: Boolean(metadata.version),
+    isRecurring: event.isRecurringEvent(),
     lastUpdated: event.getLastUpdated().getTime()
   };
 }
@@ -500,6 +501,7 @@ function staffSnapshotRecord_(event) {
     duration: Number(event.duration || 0),
     type: staffAuditText_(event.type, 100),
     notes: staffAuditText_(event.notes, 1000),
+    isRecurring: Boolean(event.isRecurring),
     lastUpdated: Number(event.lastUpdated || 0),
     seenAt: Date.now()
   };
@@ -564,6 +566,16 @@ function staffReconcileDirectChanges_(events, startDate, endDate) {
 
     events.forEach(function(event) {
       currentById[event.id] = true;
+
+      // Every occurrence in a recurring Google Calendar series shares one iCal ID.
+      // Snapshotting those occurrences by ID makes the next week's start/end time look
+      // like a direct edit of the previous week. Exclude recurring series from direct-
+      // change audit tracking while keeping them fully visible in the calendar itself.
+      if (event.isRecurring) {
+        staffDeleteSnapshot_(event.id, properties);
+        return;
+      }
+
       const key = staffSnapshotKey_(event.id);
       const previous = staffReadSnapshot_(properties, key);
       if (previous && staffSnapshotFingerprint_(previous) !== staffSnapshotFingerprint_(event)) {
@@ -589,6 +601,10 @@ function staffReconcileDirectChanges_(events, startDate, endDate) {
         }
 
         const moved = staffSerializeEvent_(liveEvent);
+        if (moved.isRecurring) {
+          staffDeleteSnapshot_(previous.id, properties);
+          return;
+        }
         if (staffSnapshotFingerprint_(previous) !== staffSnapshotFingerprint_(moved)) {
           staffWriteAudit_("変更", previous, moved, "Googleカレンダー直接操作");
         }
