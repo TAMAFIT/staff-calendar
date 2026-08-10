@@ -110,6 +110,15 @@ function doPost(e) {
       }));
     }
 
+    if (action === "staffCalendarHistoryDelete") {
+      return staffResponse_(staffWithLock_(function() {
+        return {
+          status: "success",
+          deleted: staffDeleteAudit_(data.historyIds || [])
+        };
+      }));
+    }
+
     return staffResponse_({ status: "error", message: "未対応の操作です。" });
   } catch (error) {
     return staffErrorResponse_(error);
@@ -609,17 +618,46 @@ function staffTrimAudit_(properties) {
   });
 }
 
+function staffAuditHistoryId_(key) {
+  return String(key || "").slice(STAFF_AUDIT_PREFIX.length);
+}
+
+function staffAuditKeyFromHistoryId_(historyId) {
+  const id = String(historyId || "").trim();
+  if (!/^\d+_[0-9a-f-]+$/i.test(id)) return "";
+  return STAFF_AUDIT_PREFIX + id;
+}
+
 function staffListAudit_(limit) {
   try {
     const properties = PropertiesService.getScriptProperties();
     const count = Math.min(Math.max(Number(limit) || 50, 1), 50);
     return staffAuditKeys_(properties).slice(0, count).map(function(key) {
-      return JSON.parse(properties.getProperty(key));
+      const entry = JSON.parse(properties.getProperty(key));
+      entry.historyId = staffAuditHistoryId_(key);
+      return entry;
     });
   } catch (error) {
     console.error("操作履歴の読み込みに失敗しました", error);
     return [];
   }
+}
+
+function staffDeleteAudit_(historyIds) {
+  const ids = Array.isArray(historyIds) ? historyIds : [historyIds];
+  const properties = PropertiesService.getScriptProperties();
+  const deleted = [];
+
+  ids.slice(0, STAFF_AUDIT_MAX_ENTRIES).forEach(function(historyId) {
+    const key = staffAuditKeyFromHistoryId_(historyId);
+    if (!key) return;
+    if (properties.getProperty(key) !== null) {
+      properties.deleteProperty(key);
+      deleted.push(String(historyId));
+    }
+  });
+
+  return deleted;
 }
 
 function staffAuditSummary_(event) {
