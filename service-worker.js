@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v21";
+const CACHE_NAME = "tamafit-staff-calendar-v22";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const APP_SHELL = [
   "./src/action-feedback.js",
   "./src/history-data.js",
   "./src/history-ui.js",
+  "./src/services/history-v2-calendar-repository.js",
   "./service-worker.js"
 ];
 

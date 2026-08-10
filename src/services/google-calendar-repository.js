@@ -95,18 +95,31 @@ export class GoogleCalendarRepository extends CalendarRepository {
     return response.event || null;
   }
 
-  async createEvent(input, { mutationId = "" } = {}) {
+  async createEventWithHistory(input, { mutationId = "" } = {}) {
     const response = await this.post("staffCalendarCreate", withMutationId({ event: input }, mutationId));
-    return response.event;
+    return { event: response.event, history: response.history || null };
   }
 
-  async updateEvent(id, input, { mutationId = "" } = {}) {
+  async createEvent(input, options = {}) {
+    return (await this.createEventWithHistory(input, options)).event;
+  }
+
+  async updateEventWithHistory(id, input, { mutationId = "" } = {}) {
     const response = await this.post("staffCalendarUpdate", withMutationId({ id, event: input }, mutationId));
-    return response.event;
+    return { event: response.event, history: response.history || null };
   }
 
-  async deleteEvent(id, { mutationId = "" } = {}) {
-    await this.post("staffCalendarDelete", withMutationId({ id }, mutationId));
+  async updateEvent(id, input, options = {}) {
+    return (await this.updateEventWithHistory(id, input, options)).event;
+  }
+
+  async deleteEventWithHistory(id, { mutationId = "" } = {}) {
+    const response = await this.post("staffCalendarDelete", withMutationId({ id }, mutationId));
+    return { history: response.history || null };
+  }
+
+  async deleteEvent(id, options = {}) {
+    await this.deleteEventWithHistory(id, options);
   }
 
   async findConflicts(candidate, excludeId = null) {
@@ -129,10 +142,17 @@ export class GoogleCalendarRepository extends CalendarRepository {
     return response.entries || [];
   }
 
-  async deleteHistory(historyIds) {
+  async deleteHistoryResult(historyIds) {
     const response = await this.post("staffCalendarHistoryDelete", {
       historyIds: (Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean)
     }, { retryOnce: false });
-    return response.deleted || [];
+    return {
+      deleted: response.deleted || [],
+      acknowledged: response.acknowledged || response.deleted || []
+    };
+  }
+
+  async deleteHistory(historyIds) {
+    return (await this.deleteHistoryResult(historyIds)).deleted;
   }
 }
