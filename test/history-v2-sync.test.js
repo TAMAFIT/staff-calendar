@@ -173,21 +173,21 @@ test("deleting optimistic history before sync prevents the canonical server copy
 
 test("a partial delete acknowledgement leaves only the unacknowledged history queued", async () => {
   const source = new Source();
-  const first = serverHistory("m1");
-  const second = serverHistory("m2", { historyId: "1723286641000_bbbbbbbb-bbbb-cccc-dddd-000000000002" });
-  source.history = [first, second];
+  const firstId = "1723286640000_aaaaaaaa-bbbb-cccc-dddd-000000000001";
+  const secondId = "1723286641000_bbbbbbbb-bbbb-cccc-dddd-000000000002";
   source.deleteHistoryResult = async (ids) => ({ deleted: [ids[0]], acknowledged: [ids[0]] });
 
   const repository = new HistoryV2CalendarRepository(source, {
     storage: new MemoryStorage(),
     storageKey: "history-v2-partial"
   });
-  await repository.refreshHistory();
-  repository.deleteHistoryOptimistic([first.historyId, second.historyId]);
+  repository.pendingHistoryDeleteIds.add(firstId);
+  repository.pendingHistoryDeleteIds.add(secondId);
+
   await repository.syncHistoryDeletes();
 
-  assert.equal(repository.pendingHistoryDeleteIds.has(first.historyId), false);
-  assert.equal(repository.pendingHistoryDeleteIds.has(second.historyId), true);
+  assert.equal(repository.pendingHistoryDeleteIds.has(firstId), false);
+  assert.equal(repository.pendingHistoryDeleteIds.has(secondId), true);
 });
 
 test("a single stale direct-change audit is removed once its event is known to be recurring", async () => {
