@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v22";
+const CACHE_NAME = "tamafit-staff-calendar-v23";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -51,6 +51,23 @@ function networkFirst(request, event, fallbackRequest = request) {
     .catch(() => caches.match(fallbackRequest));
 }
 
+function cachedFirstAndRefresh(request, event) {
+  return caches.match(request).then((cached) => {
+    const network = fetch(request)
+      .then((response) => cacheResponse(request, response, event))
+      .catch(() => null);
+
+    if (cached) {
+      // The installed app shell should become interactive from local storage first.
+      // Refresh the cached copy in the background for the next launch.
+      event.waitUntil(network.then(() => undefined));
+      return cached;
+    }
+
+    return network.then((response) => response || Response.error());
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -63,9 +80,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Code and styles update from the network when available, but remain usable offline.
+  // App code is an app-shell dependency: use the cached copy immediately so
+  // gesture/navigation behavior never waits on a slow mobile network. The
+  // network still refreshes the same cache in the background.
   if (request.destination === "script" || request.destination === "style") {
-    event.respondWith(networkFirst(request, event));
+    event.respondWith(cachedFirstAndRefresh(request, event));
     return;
   }
 
