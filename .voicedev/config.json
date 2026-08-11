@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "profile": "gas-webapp",
+  "productionBranch": "main",
+  "workflow": ".github/workflows/deploy-gas.yml",
+  "workflowMode": "adopted-existing",
+  "ciWorkflow": ".github/workflows/ci.yml",
+  "deployment": {
+    "type": "gas",
+    "preserveProductionUrl": true,
+    "requiredSecrets": [
+      "CLASPRC_JSON",
+      "CLASP_JSON"
+    ]
+  },
+  "checks": {
+    "test": "npm test",
+    "build": "npm run build",
+    "healthcheckUrl": ""
+  },
+  "handoff": {
+    "runtimeMasterDependency": false,
+    "clientOwnsRuntime": true
+  }
+}
