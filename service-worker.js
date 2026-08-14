@@ -1,4 +1,5 @@
-const CACHE_NAME = "tamafit-staff-calendar-v27";
+const CACHE_NAME = "tamafit-staff-calendar-v28";
+const APP_ENTRY_URL = new URL("./index.html", self.location.href).href;
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -14,16 +15,7 @@ const APP_SHELL = [
   "./styles/sync.css",
   "./styles/quick-booking.css",
   "./styles/ui-stage1.css",
-  "./src/calendar-fetch-status.js",
-  "./src/legacy-recurring-history-cleanup.js",
-  "./src/local-first-app.js",
-  "./src/calendar-view-toggle.js",
-  "./src/calendar-swipe.js",
-  "./src/quick-booking.js",
-  "./src/action-feedback.js",
-  "./src/history-data.js",
-  "./src/history-ui.js",
-  "./src/services/history-v2-calendar-repository.js",
+  "./app.bundle.js",
   "./service-worker.js"
 ];
 
@@ -48,12 +40,6 @@ function cacheResponse(request, response, event) {
   return response;
 }
 
-function networkFirst(request, event, fallbackRequest = request) {
-  return fetch(request)
-    .then((response) => cacheResponse(fallbackRequest, response, event))
-    .catch(() => caches.match(fallbackRequest));
-}
-
 function cachedFirstAndRefresh(request, event) {
   return caches.match(request).then((cached) => {
     const network = fetch(request)
@@ -61,8 +47,23 @@ function cachedFirstAndRefresh(request, event) {
       .catch(() => null);
 
     if (cached) {
-      // The installed app shell should become interactive from local storage first.
-      // Refresh the cached copy in the background for the next launch.
+      event.waitUntil(network.then(() => undefined));
+      return cached;
+    }
+
+    return network.then((response) => response || Response.error());
+  });
+}
+
+function cachedNavigation(request, event) {
+  return caches.match(APP_ENTRY_URL).then((cached) => {
+    const network = fetch(request)
+      .then((response) => cacheResponse(APP_ENTRY_URL, response, event))
+      .catch(() => null);
+
+    if (cached) {
+      // Installed launches become interactive from the local app shell immediately.
+      // Refresh index.html in the background for the next launch.
       event.waitUntil(network.then(() => undefined));
       return cached;
     }
@@ -79,13 +80,12 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(networkFirst(request, event, "./index.html"));
+    event.respondWith(cachedNavigation(request, event));
     return;
   }
 
-  // App code is an app-shell dependency: use the cached copy immediately so
-  // gesture/navigation behavior never waits on a slow mobile network. The
-  // network still refreshes the same cache in the background.
+  // App code and styles are app-shell dependencies: serve the installed copy
+  // immediately and refresh it in the background for the next launch.
   if (request.destination === "script" || request.destination === "style") {
     event.respondWith(cachedFirstAndRefresh(request, event));
     return;
