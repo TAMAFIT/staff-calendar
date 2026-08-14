@@ -8,12 +8,15 @@ import {
 } from "../src/quick-booking.js";
 import { renderDayView } from "../src/views/day-view.js";
 
-test("quick booking keeps the regular booking button and adds a separate quick action", () => {
+test("quick booking keeps the regular booking button and adds a prioritized quick action", () => {
   const html = renderDayView(new Date(2026, 7, 20), []);
   assert.match(html, /data-action="new-booking"/);
   assert.match(html, /この日に予約を追加/);
+  assert.match(html, /day-standard-booking-button/);
   assert.match(html, /data-quick-booking/);
+  assert.match(html, /day-quick-booking-button/);
   assert.match(html, /クイック予約/);
+  assert.match(html, /日付と時間だけで登録/);
 });
 
 test("trainer devices create a 60-minute trainer-assigned placeholder", () => {
@@ -48,8 +51,9 @@ test("quick booking route carries only the selected date plus quick mode", () =>
   assert.equal(quickBookingRoute("not-a-date"), "");
 });
 
-test("PWA shell precaches quick booking UI in cache v24", () => {
+test("PWA shell precaches prioritized quick booking UI in cache v25", () => {
   const sw = readFileSync(new URL("../service-worker.js", import.meta.url), "utf8");
-  assert.match(sw, /tamafit-staff-calendar-v24/);
+  assert.match(sw, /tamafit-staff-calendar-v25/);
   assert.match(sw, /\.\/src\/quick-booking\.js/);
+  assert.match(sw, /\.\/styles\/quick-booking\.css/);
 });
