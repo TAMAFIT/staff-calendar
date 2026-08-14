@@ -15,7 +15,7 @@ function groupEvents(events) {
 
 function renderWeekEvent(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-  const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
+  const color = event.type === "trial" ? "amber" : trainer?.color || "neutral";
   return `
     <div class="week-event week-event--${color}">
       <time>${event.startAt.slice(11, 16)}</time>
@@ -59,7 +59,7 @@ export function renderWeekView(anchorDate, events, history = []) {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="go-home">ホーム</button>
+        <button class="today-button" type="button" data-action="go-home">今月へ戻る</button>
       </div>
 
       <div class="view-switch" aria-label="カレンダー表示">

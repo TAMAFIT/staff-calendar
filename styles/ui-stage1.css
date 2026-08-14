@@ -1,0 +1,43 @@
+.today-button {
+  padding-inline: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.day-event {
+  grid-template-columns: 52px 4px minmax(0, 1fr) auto;
+}
+
+.day-event__manage {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  color: var(--green-800);
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.day-event__manage svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
+@media (max-width: 370px) {
+  .day-event {
+    grid-template-columns: 48px 4px minmax(0, 1fr) auto;
+    padding-inline: 9px;
+    gap: 7px;
+  }
+
+  .day-event__manage {
+    font-size: 9px;
+  }
+}

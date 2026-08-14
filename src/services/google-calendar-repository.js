@@ -3,6 +3,8 @@ import { loadOperatorId } from "../state.js";
 import { CalendarRepository } from "./calendar-repository.js";
 import { findBufferWarnings } from "./booking-proximity.js";
 
+const RECURRING_INSTANCE_PREFIX = "recurring:";
+
 function isConfigured(url) {
   return /^https:\/\/script\.google\.com\/macros\/s\//.test(String(url || ""));
 }
@@ -28,6 +30,23 @@ function connectionError(message, cause, { retryable = true } = {}) {
 
 function withMutationId(data, mutationId) {
   return mutationId ? { ...data, mutationId } : data;
+}
+
+export function normalizeExplicitRecurringEvent(event) {
+  if (!event?.isRecurring) return event;
+  const seriesId = String(event.calendarEventId || event.id || "");
+  if (!seriesId || !event.startAt) return { ...event, isRecurring: true, readOnly: true };
+  const currentId = String(event.id || "");
+  const instanceId = currentId.startsWith(RECURRING_INSTANCE_PREFIX)
+    ? currentId
+    : `${RECURRING_INSTANCE_PREFIX}${encodeURIComponent(seriesId)}:${event.startAt}`;
+  return {
+    ...event,
+    calendarEventId: seriesId,
+    id: instanceId,
+    isRecurring: true,
+    readOnly: true
+  };
 }
 
 export class GoogleCalendarRepository extends CalendarRepository {
@@ -87,12 +106,12 @@ export class GoogleCalendarRepository extends CalendarRepository {
 
   async listEvents(startDate, endDate) {
     const response = await this.get("staffCalendarList", { startDate, endDate });
-    return response.events || [];
+    return (response.events || []).map(normalizeExplicitRecurringEvent);
   }
 
   async getEvent(id) {
     const response = await this.get("staffCalendarGet", { id });
-    return response.event || null;
+    return response.event ? normalizeExplicitRecurringEvent(response.event) : null;
   }
 
   async createEventWithHistory(input, { mutationId = "" } = {}) {

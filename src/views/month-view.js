@@ -24,7 +24,7 @@ function renderEventChip(event) {
   const trainer = TRAINERS.find((item) => item.id === event.trainerId);
   const time = event.startAt.slice(11, 16);
   const displayName = Array.from(event.customerName.split(/[ 　]/)[0]).slice(0, 2).join("");
-  const color = event.type === "blocked" ? "neutral" : (event.type === "trial" ? "amber" : trainer?.color || "neutral");
+  const color = event.type === "trial" ? "amber" : trainer?.color || "neutral";
   return `
     <span class="month-event month-event--${color}" title="${escapeAttribute(`${time} ${event.customerName}`)}">
       <b>${escapeHtml(time)}</b><span>${escapeHtml(displayName)}</span>
@@ -71,7 +71,7 @@ export function renderMonthView(anchorDate, events, history = []) {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="today">今日</button>
+        <button class="today-button" type="button" data-action="today">今月へ戻る</button>
       </div>
 
       <div class="view-switch" aria-label="カレンダー表示">
