@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { renderRecentHistory } from "../src/history-ui.js";
 import { historySemanticKey } from "../src/history-data.js";
 import { ResponsiveLocalFirstCalendarRepository } from "../src/services/responsive-local-first-calendar-repository.js";
+import { renderHistoryView } from "../src/views/history-view.js";
 
 class MemoryStorage {
   constructor() {
@@ -27,21 +28,42 @@ function historyEntry(index, overrides = {}) {
     id: `event-${index}`,
     customerName: `テスト${index}`,
     trainerName: "玉井",
-    startAt: `2026-08-10T10:00:00`,
-    endAt: `2026-08-10T10:30:00`,
+    startAt: "2026-08-10T10:00:00",
+    endAt: "2026-08-10T10:30:00",
     typeName: "通常予約",
     beforeSummary: "",
     ...overrides
   };
 }
 
-test("recent history preview shows only the latest ten compact rows", () => {
+test("recent history preview shows the latest ten neutral log rows", () => {
   const html = renderRecentHistory(Array.from({ length: 11 }, (_, index) => historyEntry(index)));
-  assert.equal((html.match(/recent-history__row /g) || []).length, 10);
+  assert.equal((html.match(/class="recent-history__row"/g) || []).length, 10);
+  assert.match(html, /最近の操作ログ/);
+  assert.match(html, /新規予約/);
+  assert.match(html, /内容変更/);
+  assert.match(html, /予約削除/);
+  assert.doesNotMatch(html, /recent-history__row--create/);
+  assert.doesNotMatch(html, /recent-history__row--update/);
+  assert.doesNotMatch(html, /recent-history__row--delete/);
   assert.match(html, /テスト0/);
   assert.match(html, /テスト9/);
   assert.doesNotMatch(html, /テスト10/);
   assert.match(html, /履歴をすべて見る/);
+});
+
+test("full history is a compact expandable log with destructive actions kept inside details", () => {
+  const html = renderHistoryView([
+    historyEntry(0),
+    historyEntry(1, { beforeSummary: "2026-08-10T09:00:00〜10:00 / 旧予約" })
+  ]);
+  assert.match(html, /<details class="history-entry/);
+  assert.match(html, /history-entry__summary/);
+  assert.match(html, /予約操作の記録/);
+  assert.match(html, /新規予約/);
+  assert.match(html, /内容変更/);
+  assert.match(html, /この記録を削除/);
+  assert.match(html, /変更前/);
 });
 
 test("history semantic key is stable across server/local ids", () => {
