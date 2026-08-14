@@ -30,6 +30,14 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Upload production bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-bundle
+          path: app.bundle.js
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Build preview bundle
         run: npm run build:preview
 
