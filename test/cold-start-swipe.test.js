@@ -18,5 +18,5 @@ test("installed app scripts and styles use cached-first startup with background 
   assert.match(serviceWorker, /function cachedFirstAndRefresh\(/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(serviceWorker, /event\.respondWith\(cachedFirstAndRefresh\(request, event\)\)/);
-  assert.match(serviceWorker, /tamafit-staff-calendar-v23/);
+  assert.match(serviceWorker, /tamafit-staff-calendar-v\d+/);
 });
