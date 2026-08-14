@@ -32,11 +32,15 @@ function historyEntry(index) {
   };
 }
 
-test("recent operation summary is a compact ten-row log", () => {
+test("recent operation summary is a compact ten-row neutral log", () => {
   assert.equal(HISTORY_PREVIEW_LIMIT, 10);
   const html = renderRecentHistory(Array.from({ length: 12 }, (_, index) => historyEntry(index)));
-  assert.equal((html.match(/recent-history__row /g) || []).length, 10);
+  assert.equal((html.match(/class="recent-history__row"/g) || []).length, 10);
+  assert.match(html, /最近の操作ログ/);
   assert.match(html, /履歴をすべて見る/);
+  assert.match(html, /新規予約/);
+  assert.match(html, /内容変更/);
+  assert.match(html, /予約削除/);
   assert.doesNotMatch(html, /最新5件/);
 });
 
@@ -59,9 +63,11 @@ test("assigned booking blocks keep trainer colors across calendar views", () => 
   assert.match(renderDayView(new Date(2026, 7, 20), [shared]), /day-event--neutral/);
 });
 
-test("day cards advertise edit and delete while the redundant history shortcut is gone", () => {
+test("day cards advertise amber edit and red delete while the redundant history shortcut stays gone", () => {
   const html = renderDayView(new Date(2026, 7, 20), [blockedEvent()]);
-  assert.match(html, /変更・削除/);
+  assert.match(html, /day-event__manage-edit">変更/);
+  assert.match(html, /day-event__manage-delete">削除/);
+  assert.match(html, /タップして変更または削除/);
   assert.doesNotMatch(html, /操作履歴をみる/);
   assert.doesNotMatch(html, /追加・変更・削除の記録/);
 });
