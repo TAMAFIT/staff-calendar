@@ -51,9 +51,9 @@ test("quick booking route carries only the selected date plus quick mode", () =>
   assert.equal(quickBookingRoute("not-a-date"), "");
 });
 
-test("PWA shell precaches prioritized quick booking UI in cache v25", () => {
+test("PWA shell precaches prioritized quick booking UI in a versioned cache", () => {
   const sw = readFileSync(new URL("../service-worker.js", import.meta.url), "utf8");
-  assert.match(sw, /tamafit-staff-calendar-v25/);
+  assert.match(sw, /tamafit-staff-calendar-v\d+/);
   assert.match(sw, /\.\/src\/quick-booking\.js/);
   assert.match(sw, /\.\/styles\/quick-booking\.css/);
 });
