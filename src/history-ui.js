@@ -1,6 +1,6 @@
 import { escapeAttribute, escapeHtml } from "./utils/html.js";
 
-export const HISTORY_PREVIEW_LIMIT = 5;
+export const HISTORY_PREVIEW_LIMIT = 10;
 
 export function historyActionLabel(action) {
   return ({
@@ -12,6 +12,10 @@ export function historyActionLabel(action) {
 
 export function historyActionClass(action) {
   return ({ "作成": "create", "変更": "update", "削除": "delete" })[action] || "other";
+}
+
+function historyPreviewActionLabel(action) {
+  return ({ "作成": "追加", "変更": "変更", "削除": "削除" })[action] || String(action || "操作");
 }
 
 export function historySemanticKey(entry) {
@@ -77,7 +81,7 @@ export function renderRecentHistory(entries, limit = HISTORY_PREVIEW_LIMIT) {
         <div class="recent-history__row recent-history__row--${historyActionClass(entry.action)}">
           <time>${escapeHtml(formatHistoryClock(entry.timestamp))}</time>
           <strong title="${escapeAttribute(entry.customerName || "名称なし")}">${escapeHtml(entry.customerName || "名称なし")}</strong>
-          <span>${escapeHtml(historyActionLabel(entry.action))}</span>
+          <span>${escapeHtml(historyPreviewActionLabel(entry.action))}</span>
         </div>
       `).join("")
     : `<p class="recent-history__empty">操作履歴はまだありません</p>`;
@@ -86,11 +90,11 @@ export function renderRecentHistory(entries, limit = HISTORY_PREVIEW_LIMIT) {
     <section class="recent-history" aria-label="最近の操作">
       <div class="recent-history__heading">
         <strong>最近の操作</strong>
-        <span>最新${HISTORY_PREVIEW_LIMIT}件</span>
+        <span>${HISTORY_PREVIEW_LIMIT}件</span>
       </div>
       <div class="recent-history__list">${rows}</div>
       <button class="recent-history__more" type="button" data-action="open-history">
-        もっと見る
+        履歴をすべて見る
         <span aria-hidden="true">›</span>
       </button>
     </section>
