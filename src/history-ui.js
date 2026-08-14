@@ -4,18 +4,14 @@ export const HISTORY_PREVIEW_LIMIT = 10;
 
 export function historyActionLabel(action) {
   return ({
-    "作成": "予約を追加",
-    "変更": "予約を変更",
-    "削除": "予約を削除"
+    "作成": "新規予約",
+    "変更": "内容変更",
+    "削除": "予約削除"
   })[action] || String(action || "操作");
 }
 
 export function historyActionClass(action) {
   return ({ "作成": "create", "変更": "update", "削除": "delete" })[action] || "other";
-}
-
-function historyPreviewActionLabel(action) {
-  return ({ "作成": "追加", "変更": "変更", "削除": "削除" })[action] || String(action || "操作");
 }
 
 export function historySemanticKey(entry) {
@@ -78,18 +74,18 @@ export function renderRecentHistory(entries, limit = HISTORY_PREVIEW_LIMIT) {
   const recent = (Array.isArray(entries) ? entries : []).slice(0, limit);
   const rows = recent.length
     ? recent.map((entry) => `
-        <div class="recent-history__row recent-history__row--${historyActionClass(entry.action)}">
+        <div class="recent-history__row">
           <time>${escapeHtml(formatHistoryClock(entry.timestamp))}</time>
           <strong title="${escapeAttribute(entry.customerName || "名称なし")}">${escapeHtml(entry.customerName || "名称なし")}</strong>
-          <span>${escapeHtml(historyPreviewActionLabel(entry.action))}</span>
+          <span>${escapeHtml(historyActionLabel(entry.action))}</span>
         </div>
       `).join("")
     : `<p class="recent-history__empty">操作履歴はまだありません</p>`;
 
   return `
-    <section class="recent-history" aria-label="最近の操作">
+    <section class="recent-history" aria-label="最近の操作ログ">
       <div class="recent-history__heading">
-        <strong>最近の操作</strong>
+        <strong>最近の操作ログ</strong>
         <span>${HISTORY_PREVIEW_LIMIT}件</span>
       </div>
       <div class="recent-history__list">${rows}</div>
