@@ -59,12 +59,19 @@ export function renderDayView(date, events) {
         `}
       </div>
 
-      <button class="button button--primary button--wide day-add-button" type="button" data-action="new-booking" data-date="${isoDate}">
+      <button class="button button--wide day-add-button day-standard-booking-button" type="button" data-action="new-booking" data-date="${isoDate}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         この日に予約を追加
       </button>
-      <button class="button button--quiet button--wide day-add-button day-quick-booking-button" type="button" data-quick-booking data-date="${isoDate}">
-        クイック予約
+      <button class="button button--wide day-quick-booking-button" type="button" data-quick-booking data-date="${isoDate}">
+        <span class="day-quick-booking-button__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M13 2 5 14h7l-1 8 8-12h-7l1-8Z"/></svg>
+        </span>
+        <span class="day-quick-booking-button__copy">
+          <strong>クイック予約</strong>
+          <small>日付と時間だけで登録</small>
+        </span>
+        <svg class="day-quick-booking-button__arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
       </button>
       <button class="history-link" type="button" data-action="open-history">
         操作履歴をみる

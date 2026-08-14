@@ -1,0 +1,97 @@
+.day-standard-booking-button {
+  margin-top: 18px;
+  border: 1.5px solid var(--green-200);
+  background: var(--surface);
+  color: var(--green-800);
+  box-shadow: none;
+}
+
+.day-standard-booking-button:hover,
+.day-standard-booking-button:focus-visible {
+  border-color: var(--green-500);
+  background: var(--green-50);
+}
+
+.day-quick-booking-button {
+  display: grid;
+  width: 100%;
+  min-height: 64px;
+  grid-template-columns: 40px minmax(0, 1fr) 22px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 10px 14px 10px 12px;
+  gap: 11px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--green-700), var(--teal-700));
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(8, 117, 65, 0.26);
+  text-align: left;
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+}
+
+.day-quick-booking-button:hover,
+.day-quick-booking-button:focus-visible {
+  filter: brightness(1.04);
+  box-shadow: 0 12px 28px rgba(8, 117, 65, 0.31);
+  transform: translateY(-1px);
+}
+
+.day-quick-booking-button:active {
+  box-shadow: 0 7px 17px rgba(8, 117, 65, 0.24);
+  transform: translateY(0) scale(0.99);
+}
+
+.day-quick-booking-button__icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.day-quick-booking-button__icon svg {
+  width: 22px;
+  height: 22px;
+  fill: rgba(255, 255, 255, 0.18);
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.day-quick-booking-button__copy {
+  display: block;
+  min-width: 0;
+}
+
+.day-quick-booking-button__copy strong,
+.day-quick-booking-button__copy small {
+  display: block;
+}
+
+.day-quick-booking-button__copy strong {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.day-quick-booking-button__copy small {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.day-quick-booking-button__arrow {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.3;
+  opacity: 0.9;
+}
