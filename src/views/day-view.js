@@ -32,7 +32,12 @@ function renderDayEvent(event) {
       </span>
       ${isRecurring
         ? '<span class="sync-badge" aria-label="Googleカレンダーの繰り返し予定">定期</span>'
-        : '<span class="day-event__manage">変更・削除<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>'}
+        : `<span class="day-event__manage" aria-label="タップして変更または削除">
+            <span class="day-event__manage-edit">変更</span>
+            <span class="day-event__manage-separator">・</span>
+            <span class="day-event__manage-delete">削除</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </span>`}
     </button>
   `;
 }
