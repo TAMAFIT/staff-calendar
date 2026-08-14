@@ -21,27 +21,27 @@ class MemoryStorage {
 function historyEntry(index, overrides = {}) {
   return {
     historyId: `${1700000000000 + index}_00000000-0000-4000-8000-00000000000${index}`,
-    timestamp: `2026-08-10 15:0${index}:00`,
+    timestamp: `2026-08-10 15:${String(index).padStart(2, "0")}:00`,
     action: index % 3 === 0 ? "作成" : index % 3 === 1 ? "変更" : "削除",
     source: "玉井",
     id: `event-${index}`,
     customerName: `テスト${index}`,
     trainerName: "玉井",
-    startAt: `2026-08-10T1${index}:00:00`,
-    endAt: `2026-08-10T1${index}:30:00`,
+    startAt: `2026-08-10T10:00:00`,
+    endAt: `2026-08-10T10:30:00`,
     typeName: "通常予約",
     beforeSummary: "",
     ...overrides
   };
 }
 
-test("recent history preview shows only the latest five compact rows", () => {
-  const html = renderRecentHistory(Array.from({ length: 6 }, (_, index) => historyEntry(index)));
-  assert.equal((html.match(/recent-history__row /g) || []).length, 5);
+test("recent history preview shows only the latest ten compact rows", () => {
+  const html = renderRecentHistory(Array.from({ length: 11 }, (_, index) => historyEntry(index)));
+  assert.equal((html.match(/recent-history__row /g) || []).length, 10);
   assert.match(html, /テスト0/);
-  assert.match(html, /テスト4/);
-  assert.doesNotMatch(html, /テスト5/);
-  assert.match(html, /もっと見る/);
+  assert.match(html, /テスト9/);
+  assert.doesNotMatch(html, /テスト10/);
+  assert.match(html, /履歴をすべて見る/);
 });
 
 test("history semantic key is stable across server/local ids", () => {
