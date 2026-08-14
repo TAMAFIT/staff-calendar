@@ -38,6 +38,7 @@ function renderDayEvent(event) {
 }
 
 export function renderDayView(date, events) {
+  const isoDate = toISODate(date);
   const content = `
     <section class="day-view">
       <div class="day-summary">
@@ -58,9 +59,12 @@ export function renderDayView(date, events) {
         `}
       </div>
 
-      <button class="button button--primary button--wide day-add-button" type="button" data-action="new-booking" data-date="${toISODate(date)}">
+      <button class="button button--primary button--wide day-add-button" type="button" data-action="new-booking" data-date="${isoDate}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         この日に予約を追加
+      </button>
+      <button class="button button--quiet button--wide day-quick-booking-button" type="button" data-quick-booking data-date="${isoDate}">
+        クイック予約
       </button>
       <button class="history-link" type="button" data-action="open-history">
         操作履歴をみる
