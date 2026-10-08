@@ -218,6 +218,9 @@
     async listHistory() {
       throw new Error("listHistory must be implemented");
     }
+    async deleteHistory() {
+      throw new Error("deleteHistory must be implemented");
+    }
   };
 
   // src/services/booking-proximity.js
@@ -240,6 +243,7 @@
   }
 
   // src/services/google-calendar-repository.js
+  var RECURRING_INSTANCE_PREFIX = "recurring:";
   function isConfigured(url) {
     return /^https:\/\/script\.google\.com\/macros\/s\//.test(String(url || ""));
   }
@@ -247,9 +251,38 @@
     if (isConfigured(url)) return;
     throw new Error("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u9023\u643A\u306EURL\u304C\u672A\u8A2D\u5B9A\u3067\u3059\u3002Apps Script\u3092\u30C7\u30D7\u30ED\u30A4\u3057\u3066\u304B\u3089 src/config.js \u306B /exec URL \u3092\u8A2D\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   }
-  function ensureSuccess(payload) {
+  function isDefinitiveRejection(message) {
+    return /同じ担当トレーナーに重複する予約があります|予約が見つかりませんでした|未対応の操作です|確認してください|入力してください|一致しません|予約IDがありません/.test(String(message || ""));
+  }
+  function ensureSuccess(payload, { mutation = false } = {}) {
     if (payload?.status === "success") return payload;
-    throw new Error(payload?.message || "Google\u30AB\u30EC\u30F3\u30C0\u30FC\u3068\u306E\u901A\u4FE1\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+    const error = new Error(payload?.message || "Google\u30AB\u30EC\u30F3\u30C0\u30FC\u3068\u306E\u901A\u4FE1\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+    error.retryable = typeof payload?.retryable === "boolean" ? payload.retryable : mutation && !isDefinitiveRejection(error.message);
+    if (typeof payload?.code === "string") error.code = payload.code;
+    throw error;
+  }
+  function connectionError(message, cause, { retryable = true } = {}) {
+    const error = new Error(message);
+    error.retryable = retryable;
+    error.cause = cause;
+    return error;
+  }
+  function withMutationId(data, mutationId) {
+    return mutationId ? { ...data, mutationId } : data;
+  }
+  function normalizeExplicitRecurringEvent(event) {
+    if (!event?.isRecurring) return event;
+    const seriesId = String(event.calendarEventId || event.id || "");
+    if (!seriesId || !event.startAt) return { ...event, isRecurring: true, readOnly: true };
+    const currentId = String(event.id || "");
+    const instanceId = currentId.startsWith(RECURRING_INSTANCE_PREFIX) ? currentId : `${RECURRING_INSTANCE_PREFIX}${encodeURIComponent(seriesId)}:${event.startAt}`;
+    return {
+      ...event,
+      calendarEventId: seriesId,
+      id: instanceId,
+      isRecurring: true,
+      readOnly: true
+    };
   }
   var GoogleCalendarRepository = class extends CalendarRepository {
     constructor({ endpoint = GOOGLE_APPS_SCRIPT_URL, fetchImpl = (...args) => globalThis.fetch(...args) } = {}) {
@@ -264,39 +297,68 @@
       Object.entries(params).forEach(([key, value]) => {
         if (value !== void 0 && value !== null) url.searchParams.set(key, value);
       });
-      const response = await this.fetchImpl(url, { method: "GET", redirect: "follow" });
-      if (!response.ok) throw new Error("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      let response;
+      try {
+        response = await this.fetchImpl(url, { method: "GET", redirect: "follow" });
+      } catch (error) {
+        throw connectionError("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002", error);
+      }
+      if (!response.ok) throw connectionError("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
       return ensureSuccess(await response.json());
     }
-    async post(action, data = {}) {
+    async post(action, data = {}, { retryOnce = Boolean(data.mutationId) } = {}) {
       ensureConfigured(this.endpoint);
-      const response = await this.fetchImpl(this.endpoint, {
-        method: "POST",
-        redirect: "follow",
-        // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
-        body: JSON.stringify({ action, operatorId: loadOperatorId(), ...data })
-      });
-      if (!response.ok) throw new Error("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
-      return ensureSuccess(await response.json());
+      const body = JSON.stringify({ action, operatorId: loadOperatorId(), ...data });
+      const attempts = retryOnce ? 2 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          const response = await this.fetchImpl(this.endpoint, {
+            method: "POST",
+            redirect: "follow",
+            // Do not add a Content-Type header. This keeps the Apps Script request CORS-simple.
+            body
+          });
+          if (!response.ok) {
+            throw connectionError(`Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\uFF08HTTP ${response.status}\uFF09`);
+          }
+          return ensureSuccess(await response.json(), { mutation: Boolean(data.mutationId) });
+        } catch (error) {
+          if (error?.retryable === false) throw error;
+          if (attempt + 1 < attempts) continue;
+          if (error?.retryable) throw error;
+          throw connectionError("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002", error);
+        }
+      }
+      throw connectionError("Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u63A5\u7D9A\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
     }
     async listEvents(startDate, endDate) {
       const response = await this.get("staffCalendarList", { startDate, endDate });
-      return response.events || [];
+      return (response.events || []).map(normalizeExplicitRecurringEvent);
     }
     async getEvent(id) {
       const response = await this.get("staffCalendarGet", { id });
-      return response.event || null;
+      return response.event ? normalizeExplicitRecurringEvent(response.event) : null;
     }
-    async createEvent(input) {
-      const response = await this.post("staffCalendarCreate", { event: input });
-      return response.event;
+    async createEventWithHistory(input, { mutationId = "" } = {}) {
+      const response = await this.post("staffCalendarCreate", withMutationId({ event: input }, mutationId));
+      return { event: response.event, history: response.history || null };
     }
-    async updateEvent(id, input) {
-      const response = await this.post("staffCalendarUpdate", { id, event: input });
-      return response.event;
+    async createEvent(input, options = {}) {
+      return (await this.createEventWithHistory(input, options)).event;
     }
-    async deleteEvent(id) {
-      await this.post("staffCalendarDelete", { id });
+    async updateEventWithHistory(id, input, { mutationId = "" } = {}) {
+      const response = await this.post("staffCalendarUpdate", withMutationId({ id, event: input }, mutationId));
+      return { event: response.event, history: response.history || null };
+    }
+    async updateEvent(id, input, options = {}) {
+      return (await this.updateEventWithHistory(id, input, options)).event;
+    }
+    async deleteEventWithHistory(id, { mutationId = "" } = {}) {
+      const response = await this.post("staffCalendarDelete", withMutationId({ id }, mutationId));
+      return { history: response.history || null };
+    }
+    async deleteEvent(id, options = {}) {
+      await this.deleteEventWithHistory(id, options);
     }
     async findConflicts(candidate, excludeId = null) {
       if (!candidate.trainerId) return [];
@@ -314,6 +376,18 @@
     async listHistory(limit = 50) {
       const response = await this.get("staffCalendarHistory", { limit });
       return response.entries || [];
+    }
+    async deleteHistoryResult(historyIds) {
+      const response = await this.post("staffCalendarHistoryDelete", {
+        historyIds: (Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean)
+      }, { retryOnce: false });
+      return {
+        deleted: response.deleted || [],
+        acknowledged: response.acknowledged || response.deleted || []
+      };
+    }
+    async deleteHistory(historyIds) {
+      return (await this.deleteHistoryResult(historyIds)).deleted;
     }
   };
 
@@ -514,8 +588,22 @@
   function rangeContains(snapshot, startDate, endDate) {
     return snapshot.startDate <= startDate && snapshot.endDate >= endDate;
   }
+  function eventDate(event) {
+    return String(event?.startAt || "").slice(0, 10);
+  }
   function eventsForRange(events, startDate, endDate) {
-    return events.filter((event) => event.startAt.slice(0, 10) >= startDate && event.startAt.slice(0, 10) <= endDate).sort((a, b) => a.startAt.localeCompare(b.startAt));
+    return events.filter((event) => eventDate(event) >= startDate && eventDate(event) <= endDate).sort((a, b) => a.startAt.localeCompare(b.startAt));
+  }
+  function createMutationId(kind) {
+    const random = globalThis.crypto?.randomUUID?.() || `${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    return `${kind}-${Date.now()}-${random}`;
+  }
+  function hasConflict(events, candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
+    return events.filter((event) => {
+      if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
+      return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
+    });
   }
   var CachedCalendarRepository = class extends CalendarRepository {
     constructor(source, {
@@ -538,7 +626,12 @@
       if (!canUseStorage(this.storage)) return [];
       try {
         const saved = JSON.parse(this.storage.getItem(this.storageKey) || "[]");
-        return Array.isArray(saved) ? saved.filter((snapshot) => snapshot && Array.isArray(snapshot.events) && snapshot.startDate && snapshot.endDate && snapshot.fetchedAt) : [];
+        return Array.isArray(saved) ? saved.filter((snapshot) => snapshot && Array.isArray(snapshot.events) && snapshot.startDate && snapshot.endDate && snapshot.fetchedAt !== void 0).map((snapshot) => ({
+          ...snapshot,
+          // A page reload may interrupt an in-flight request. Keep showing the optimistic
+          // value but force an immediate revalidation so Google remains authoritative.
+          fetchedAt: snapshot.events.some((event) => event.status === "pending") ? 0 : snapshot.fetchedAt
+        })) : [];
       } catch {
         return [];
       }
@@ -569,7 +662,9 @@
       if (this.pendingRequests.has(requestKey)) return this.pendingRequests.get(requestKey);
       const generation = this.cacheGeneration;
       const request = this.source.listEvents(startDate, endDate).then((events) => {
-        if (generation !== this.cacheGeneration) return eventsForRange(events, startDate, endDate);
+        if (generation !== this.cacheGeneration) {
+          return this.getCachedEvents(startDate, endDate)?.events || eventsForRange(events, startDate, endDate);
+        }
         const snapshot = {
           startDate,
           endDate,
@@ -593,41 +688,1172 @@
       } catch {
       }
     }
+    updateCachedEvents({ removeIds = [], upsertEvents = [] } = {}) {
+      this.cacheGeneration += 1;
+      const idsToRemove = new Set(removeIds.filter(Boolean));
+      upsertEvents.forEach((event) => {
+        if (event?.id) idsToRemove.add(event.id);
+      });
+      let snapshots = this.snapshots.map((snapshot) => {
+        let changed = snapshot.events.some((event) => idsToRemove.has(event.id));
+        const nextEvents = snapshot.events.filter((event) => !idsToRemove.has(event.id));
+        upsertEvents.forEach((event) => {
+          const date = eventDate(event);
+          if (date && rangeContains(snapshot, date, date)) {
+            nextEvents.push(event);
+            changed = true;
+          }
+        });
+        if (!changed) return snapshot;
+        return {
+          ...snapshot,
+          events: nextEvents.sort((a, b) => a.startAt.localeCompare(b.startAt)),
+          fetchedAt: this.now()
+        };
+      });
+      upsertEvents.forEach((event) => {
+        const date = eventDate(event);
+        if (!date || snapshots.some((snapshot) => rangeContains(snapshot, date, date))) return;
+        snapshots.unshift({
+          startDate: date,
+          endDate: date,
+          events: [event],
+          fetchedAt: this.now()
+        });
+      });
+      this.snapshots = snapshots.slice(0, MAX_SNAPSHOTS);
+      this.writeSnapshots();
+    }
     async getEvent(id) {
       const cached = this.snapshots.flatMap((snapshot) => snapshot.events).find((event) => event.id === id);
       return cached || this.source.getEvent(id);
     }
     async createEvent(input) {
       const event = await this.source.createEvent(input);
-      this.invalidate();
+      this.updateCachedEvents({ upsertEvents: [event] });
       return event;
     }
     async updateEvent(id, input) {
       const event = await this.source.updateEvent(id, input);
-      this.invalidate();
+      this.updateCachedEvents({ removeIds: [id], upsertEvents: [event] });
       return event;
     }
     async deleteEvent(id) {
       await this.source.deleteEvent(id);
-      this.invalidate();
+      this.updateCachedEvents({ removeIds: [id] });
     }
-    async findConflicts(candidate, excludeId = null) {
-      if (!candidate.trainerId) return [];
+    analyzeCachedBooking(candidate, excludeId = null) {
+      const date = candidate.startAt.slice(0, 10);
+      const cached = this.getCachedEvents(date, date);
+      if (!cached) return null;
+      return {
+        conflicts: hasConflict(cached.events, candidate, excludeId),
+        bufferWarnings: findBufferWarnings(cached.events, candidate, excludeId),
+        events: cached.events,
+        isFresh: cached.isFresh
+      };
+    }
+    async analyzeBooking(candidate, excludeId = null) {
+      const cachedAnalysis = this.analyzeCachedBooking(candidate, excludeId);
+      if (cachedAnalysis) return cachedAnalysis;
       const date = candidate.startAt.slice(0, 10);
       const events = await this.refreshEvents(date, date);
-      return events.filter((event) => {
-        if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
-        return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
-      });
+      return {
+        conflicts: hasConflict(events, candidate, excludeId),
+        bufferWarnings: findBufferWarnings(events, candidate, excludeId),
+        events,
+        isFresh: true
+      };
+    }
+    async findConflicts(candidate, excludeId = null) {
+      return (await this.analyzeBooking(candidate, excludeId)).conflicts;
     }
     async findBufferWarnings(candidate, excludeId = null) {
-      const date = candidate.startAt.slice(0, 10);
-      return findBufferWarnings(await this.refreshEvents(date, date), candidate, excludeId);
+      return (await this.analyzeBooking(candidate, excludeId)).bufferWarnings;
+    }
+    createEventOptimistic(input) {
+      const mutationId = createMutationId("create");
+      const optimisticEvent = {
+        id: `pending:${mutationId}`,
+        ...input,
+        status: "pending",
+        source: "optimistic",
+        isManaged: true,
+        lastUpdated: this.now()
+      };
+      this.updateCachedEvents({ upsertEvents: [optimisticEvent] });
+      const committed = this.source.createEvent(input, { mutationId }).then((event) => {
+        this.updateCachedEvents({ removeIds: [optimisticEvent.id], upsertEvents: [event] });
+        return event;
+      }).catch((error) => {
+        this.updateCachedEvents({ removeIds: [optimisticEvent.id] });
+        throw error;
+      });
+      return { event: optimisticEvent, committed, mutationId };
+    }
+    async updateEventOptimistic(id, input) {
+      const previous = await this.getEvent(id);
+      if (!previous) throw new Error("\u5909\u66F4\u3059\u308B\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      const mutationId = createMutationId("update");
+      const optimisticEvent = {
+        ...previous,
+        ...input,
+        id,
+        status: "pending",
+        source: "optimistic",
+        lastUpdated: this.now()
+      };
+      this.updateCachedEvents({ removeIds: [id], upsertEvents: [optimisticEvent] });
+      const committed = this.source.updateEvent(id, input, { mutationId }).then((event) => {
+        this.updateCachedEvents({ removeIds: [id], upsertEvents: [event] });
+        return event;
+      }).catch((error) => {
+        this.updateCachedEvents({ removeIds: [id], upsertEvents: [previous] });
+        throw error;
+      });
+      return { event: optimisticEvent, previous, committed, mutationId };
+    }
+    async deleteEventOptimistic(id) {
+      const previous = await this.getEvent(id);
+      if (!previous) throw new Error("\u524A\u9664\u3059\u308B\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      const mutationId = createMutationId("delete");
+      this.updateCachedEvents({ removeIds: [id] });
+      const committed = this.source.deleteEvent(id, { mutationId }).then(() => previous).catch((error) => {
+        this.updateCachedEvents({ upsertEvents: [previous] });
+        throw error;
+      });
+      return { event: previous, committed, mutationId };
     }
     async listHistory(limit = 50) {
       return this.source.listHistory(limit);
     }
   };
+
+  // src/history-data.js
+  function historySemanticKey(entry) {
+    return [
+      entry?.action || "",
+      entry?.customerName || "",
+      entry?.startAt || "",
+      entry?.endAt || "",
+      entry?.beforeSummary || ""
+    ].join("|");
+  }
+
+  // src/services/local-first-calendar-repository.js
+  var DEFAULT_TTL_MS = 3e4;
+  var MAX_COVERAGE = 24;
+  var MAX_HISTORY = 50;
+  var RETRY_DELAYS = [1500, 4e3, 1e4, 3e4, 6e4];
+  function safeParse(storage, key, fallback) {
+    try {
+      const value = JSON.parse(storage?.getItem(key) || "null");
+      return value ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  function safeWrite(storage, key, value) {
+    try {
+      storage?.setItem(key, JSON.stringify(value));
+    } catch {
+    }
+  }
+  function makeId2(prefix) {
+    const random = globalThis.crypto?.randomUUID?.() || `${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    return `${prefix}-${Date.now()}-${random}`;
+  }
+  function eventDate2(event) {
+    return String(event?.startAt || "").slice(0, 10);
+  }
+  function inRange(event, startDate, endDate) {
+    const date = eventDate2(event);
+    return date >= startDate && date <= endDate;
+  }
+  function sortEvents(events) {
+    return [...events].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  }
+  function trainerName(id) {
+    if (id === "tamai") return "\u7389\u4E95";
+    if (id === "obayashi") return "\u5927\u6797";
+    return "\u6307\u5B9A\u306A\u3057";
+  }
+  function typeName(type) {
+    return {
+      member: "\u901A\u5E38\u4E88\u7D04",
+      trial: "\u4F53\u9A13",
+      consultation: "\u898B\u5B66\u30FB\u76F8\u8AC7",
+      blocked: "\u4E88\u7D04\u30D6\u30ED\u30C3\u30AF",
+      tentative: "\u4EEE\u4E88\u7D04\u67A0",
+      event: "\u30A4\u30D9\u30F3\u30C8"
+    }[type] || type || "\u4E88\u5B9A";
+  }
+  function hasConflict2(events, candidate, excludeId = null) {
+    if (!candidate.trainerId) return [];
+    return events.filter((event) => {
+      if (event.id === excludeId || event.trainerId !== candidate.trainerId) return false;
+      return candidate.startAt < event.endAt && candidate.endAt > event.startAt;
+    });
+  }
+  var LocalFirstCalendarRepository = class extends CalendarRepository {
+    constructor(source, {
+      storage = globalThis.localStorage,
+      storageKey = "tamafit_staff_calendar_local_first_v1",
+      now = () => Date.now(),
+      ttlMs = DEFAULT_TTL_MS
+    } = {}) {
+      super();
+      this.source = source;
+      this.storage = storage;
+      this.storageKey = storageKey;
+      this.now = now;
+      this.ttlMs = ttlMs;
+      this.recordsKey = `${storageKey}:records`;
+      this.coverageKey = `${storageKey}:coverage`;
+      this.outboxKey = `${storageKey}:outbox`;
+      this.historyKey = `${storageKey}:history`;
+      this.records = safeParse(storage, this.recordsKey, []);
+      this.coverage = safeParse(storage, this.coverageKey, []);
+      this.outbox = safeParse(storage, this.outboxKey, []);
+      this.history = safeParse(storage, this.historyKey, []);
+      this.listeners = /* @__PURE__ */ new Set();
+      this.syncing = false;
+      this.retryTimer = null;
+      this.refreshes = /* @__PURE__ */ new Map();
+      this.migrateLegacyCache();
+      queueMicrotask(() => this.syncNow());
+    }
+    migrateLegacyCache() {
+      if (this.records.length) return;
+      const legacy = safeParse(this.storage, "tamafit_staff_calendar_google_cache_v1", []);
+      if (!Array.isArray(legacy) || !legacy.length) return;
+      const byId = /* @__PURE__ */ new Map();
+      legacy.forEach((snapshot) => {
+        (snapshot?.events || []).forEach((event) => byId.set(event.id, event));
+      });
+      this.records = sortEvents([...byId.values()]);
+      this.coverage = legacy.filter((item) => item?.startDate && item?.endDate).map((item) => ({ startDate: item.startDate, endDate: item.endDate, fetchedAt: item.fetchedAt || 0 })).slice(0, MAX_COVERAGE);
+      this.persist();
+    }
+    persist() {
+      safeWrite(this.storage, this.recordsKey, this.records);
+      safeWrite(this.storage, this.coverageKey, this.coverage);
+      safeWrite(this.storage, this.outboxKey, this.outbox);
+      safeWrite(this.storage, this.historyKey, this.history.slice(0, MAX_HISTORY));
+    }
+    onSyncFailure(listener) {
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
+    }
+    emitFailure(detail) {
+      this.listeners.forEach((listener) => {
+        try {
+          listener(detail);
+        } catch {
+        }
+      });
+    }
+    getCachedEvents(startDate, endDate) {
+      const covering = this.coverage.filter((item) => item.startDate <= startDate && item.endDate >= endDate).sort((a, b) => b.fetchedAt - a.fetchedAt)[0];
+      return {
+        events: sortEvents(this.records.filter((event) => inRange(event, startDate, endDate))),
+        fetchedAt: covering?.fetchedAt || 0,
+        isFresh: Boolean(covering && this.now() - covering.fetchedAt < this.ttlMs)
+      };
+    }
+    getEventCached(id) {
+      return this.records.find((event) => event.id === id) || null;
+    }
+    getCachedHistory() {
+      return this.history.slice(0, MAX_HISTORY);
+    }
+    async listEvents(startDate, endDate) {
+      return this.getCachedEvents(startDate, endDate).events;
+    }
+    async getEvent(id) {
+      const cached = this.getEventCached(id);
+      if (cached) return cached;
+      const event = await this.source.getEvent(id);
+      if (event) this.upsertRecord(event);
+      return event;
+    }
+    async refreshEvents(startDate, endDate) {
+      const key = `${startDate}:${endDate}`;
+      if (this.refreshes.has(key)) return this.refreshes.get(key);
+      const request = this.source.listEvents(startDate, endDate).then((serverEvents) => {
+        const lockedIds = new Set(
+          this.outbox.filter((op) => op.kind === "update" || op.kind === "delete").map((op) => op.targetId)
+        );
+        const localPending = this.records.filter((event) => inRange(event, startDate, endDate) && (event.syncState === "pending" || lockedIds.has(event.id) || String(event.id).startsWith("local:")));
+        const outside = this.records.filter((event) => !inRange(event, startDate, endDate));
+        const filteredServer = serverEvents.filter((event) => !lockedIds.has(event.id));
+        const merged = /* @__PURE__ */ new Map();
+        [...outside, ...filteredServer, ...localPending].forEach((event) => merged.set(event.id, event));
+        this.records = sortEvents([...merged.values()]);
+        this.coverage = [
+          { startDate, endDate, fetchedAt: this.now() },
+          ...this.coverage.filter((item) => item.startDate !== startDate || item.endDate !== endDate)
+        ].slice(0, MAX_COVERAGE);
+        this.persist();
+        return this.getCachedEvents(startDate, endDate).events;
+      }).finally(() => this.refreshes.delete(key));
+      this.refreshes.set(key, request);
+      return request;
+    }
+    refreshHistory() {
+      return this.source.listHistory(MAX_HISTORY).then((entries) => {
+        const localPending = this.history.filter((entry) => entry.localOnly);
+        const seen = /* @__PURE__ */ new Set();
+        this.history = [...localPending, ...entries].filter((entry) => {
+          const key = `${entry.timestamp}|${entry.action}|${entry.id}|${entry.customerName}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, MAX_HISTORY);
+        this.persist();
+        return this.history;
+      });
+    }
+    async listHistory(limit = MAX_HISTORY) {
+      return this.history.slice(0, limit);
+    }
+    upsertRecord(event, removeId = "") {
+      const remove = new Set([removeId, event?.id].filter(Boolean));
+      this.records = sortEvents([
+        ...this.records.filter((item) => !remove.has(item.id)),
+        ...event ? [event] : []
+      ]);
+      this.persist();
+    }
+    removeRecord(id) {
+      this.records = this.records.filter((event) => event.id !== id);
+      this.persist();
+    }
+    appendLocalHistory(action, before, after) {
+      const current = after || before;
+      if (!current) return;
+      const now = new Date(this.now()).toISOString();
+      this.history = [{
+        timestamp: now,
+        action,
+        source: getOperatorProfile()?.name || "\u672A\u8A2D\u5B9A\u7AEF\u672B",
+        id: current.id,
+        customerName: current.customerName,
+        trainerName: trainerName(current.trainerId),
+        startAt: current.startAt,
+        endAt: current.endAt,
+        typeName: typeName(current.type),
+        notes: current.notes || "",
+        beforeSummary: before && after ? `${before.startAt}\u301C${before.endAt} / ${before.customerName}` : "",
+        localOnly: true
+      }, ...this.history].slice(0, MAX_HISTORY);
+      this.persist();
+    }
+    analyzeCachedBooking(candidate, excludeId = null) {
+      const date = candidate.startAt.slice(0, 10);
+      const events = this.getCachedEvents(date, date).events;
+      return {
+        conflicts: hasConflict2(events, candidate, excludeId),
+        bufferWarnings: findBufferWarnings(events, candidate, excludeId),
+        events
+      };
+    }
+    async analyzeBooking(candidate, excludeId = null) {
+      return this.analyzeCachedBooking(candidate, excludeId);
+    }
+    async findConflicts(candidate, excludeId = null) {
+      return this.analyzeCachedBooking(candidate, excludeId).conflicts;
+    }
+    async findBufferWarnings(candidate, excludeId = null) {
+      return this.analyzeCachedBooking(candidate, excludeId).bufferWarnings;
+    }
+    createEventOptimistic(input) {
+      const mutationId = makeId2("create");
+      const localId = `local:${mutationId}`;
+      const event = {
+        ...input,
+        id: localId,
+        status: "confirmed",
+        syncState: "pending",
+        source: "local-first",
+        isManaged: true,
+        lastUpdated: this.now()
+      };
+      this.upsertRecord(event);
+      this.appendLocalHistory("\u4F5C\u6210", null, event);
+      this.outbox.push({
+        id: mutationId,
+        kind: "create",
+        targetId: localId,
+        input,
+        before: null,
+        createdAt: this.now(),
+        attempts: 0,
+        notified: false
+      });
+      this.persist();
+      queueMicrotask(() => this.syncNow());
+      return { event, mutationId };
+    }
+    updateEventOptimistic(id, input) {
+      const before = this.getEventCached(id);
+      if (!before) throw new Error("\u5909\u66F4\u3059\u308B\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      const mutationId = makeId2("update");
+      const event = {
+        ...before,
+        ...input,
+        id,
+        status: "confirmed",
+        syncState: "pending",
+        source: "local-first",
+        lastUpdated: this.now()
+      };
+      this.upsertRecord(event);
+      this.appendLocalHistory("\u5909\u66F4", before, event);
+      this.outbox.push({
+        id: mutationId,
+        kind: "update",
+        targetId: id,
+        input,
+        before,
+        createdAt: this.now(),
+        attempts: 0,
+        notified: false
+      });
+      this.persist();
+      queueMicrotask(() => this.syncNow());
+      return { event, previous: before, mutationId };
+    }
+    deleteEventOptimistic(id) {
+      const before = this.getEventCached(id);
+      if (!before) throw new Error("\u524A\u9664\u3059\u308B\u4E88\u7D04\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002");
+      const mutationId = makeId2("delete");
+      this.removeRecord(id);
+      this.appendLocalHistory("\u524A\u9664", before, null);
+      this.outbox.push({
+        id: mutationId,
+        kind: "delete",
+        targetId: id,
+        input: null,
+        before,
+        createdAt: this.now(),
+        attempts: 0,
+        notified: false
+      });
+      this.persist();
+      queueMicrotask(() => this.syncNow());
+      return { event: before, mutationId };
+    }
+    async createEvent(input) {
+      return this.createEventOptimistic(input).event;
+    }
+    async updateEvent(id, input) {
+      return this.updateEventOptimistic(id, input).event;
+    }
+    async deleteEvent(id) {
+      this.deleteEventOptimistic(id);
+    }
+    rewriteTargetId(oldId, newId) {
+      this.outbox.forEach((op) => {
+        if (op.targetId === oldId) op.targetId = newId;
+        if (op.before?.id === oldId) op.before = { ...op.before, id: newId };
+      });
+    }
+    rollback(op, error) {
+      if (op.kind === "create") {
+        this.removeRecord(op.targetId);
+      } else if (op.before) {
+        this.upsertRecord({ ...op.before, syncState: void 0 });
+      }
+      this.outbox = this.outbox.filter((item) => item.id !== op.id);
+      this.persist();
+      this.emitFailure({ op, error, rolledBack: true });
+    }
+    scheduleRetry(op, error) {
+      op.attempts = Number(op.attempts || 0) + 1;
+      const index = Math.min(op.attempts - 1, RETRY_DELAYS.length - 1);
+      op.nextAttemptAt = this.now() + RETRY_DELAYS[index];
+      if (op.attempts >= 3 && !op.notified) {
+        op.notified = true;
+        this.emitFailure({ op, error, rolledBack: false, deferred: true });
+      }
+      this.persist();
+      clearTimeout(this.retryTimer);
+      this.retryTimer = setTimeout(() => this.syncNow(), RETRY_DELAYS[index]);
+    }
+    async syncOperation(op) {
+      if (op.kind === "create") {
+        const serverEvent = await this.source.createEvent(op.input, { mutationId: op.id });
+        const oldId = op.targetId;
+        const later = this.outbox.slice(1).filter((item) => item.targetId === oldId);
+        this.rewriteTargetId(oldId, serverEvent.id);
+        const current = this.getEventCached(oldId);
+        this.removeRecord(oldId);
+        if (!later.some((item) => item.kind === "delete")) {
+          this.upsertRecord(later.length && current ? { ...current, id: serverEvent.id, syncState: "pending", source: "local-first" } : { ...serverEvent, syncState: void 0 });
+        }
+        return;
+      }
+      if (op.kind === "update") {
+        const serverEvent = await this.source.updateEvent(op.targetId, op.input, { mutationId: op.id });
+        const hasLater = this.outbox.slice(1).some((item) => item.targetId === op.targetId);
+        if (!hasLater) this.upsertRecord({ ...serverEvent, syncState: void 0 });
+        return;
+      }
+      if (op.kind === "delete") {
+        await this.source.deleteEvent(op.targetId, { mutationId: op.id });
+      }
+    }
+    async syncNow() {
+      if (this.syncing || !this.outbox.length) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      this.syncing = true;
+      clearTimeout(this.retryTimer);
+      try {
+        while (this.outbox.length) {
+          const op = this.outbox[0];
+          if (op.nextAttemptAt && op.nextAttemptAt > this.now()) {
+            this.scheduleRetry(op, new Error("\u518D\u8A66\u884C\u5F85\u3061"));
+            break;
+          }
+          try {
+            await this.syncOperation(op);
+            this.outbox.shift();
+            this.persist();
+          } catch (error) {
+            if (error?.retryable !== false) {
+              this.scheduleRetry(op, error);
+              break;
+            }
+            this.rollback(op, error);
+          }
+        }
+      } finally {
+        this.syncing = false;
+      }
+    }
+  };
+
+  // src/services/responsive-local-first-calendar-repository.js
+  var BROAD_PREFETCH_DAYS = 90;
+  var MONTH_GRID_SPAN_DAYS = 41;
+  var RECURRING_INSTANCE_PREFIX2 = "recurring:";
+  var MAX_HISTORY2 = 50;
+  function rangeLengthDays(startDate, endDate) {
+    return Math.round((parseISODate(endDate).getTime() - parseISODate(startDate).getTime()) / 864e5);
+  }
+  function monthDataRange(anchorDate) {
+    const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+    const last = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
+    return {
+      startDate: toISODate(first),
+      endDate: toISODate(last)
+    };
+  }
+  function normalizeCalendarReadRange(startDate, endDate) {
+    const start = parseISODate(startDate);
+    const end = parseISODate(endDate);
+    const looksLikeMonthGrid = rangeLengthDays(startDate, endDate) === MONTH_GRID_SPAN_DAYS && start.getDay() === 0 && end.getDay() === 6;
+    if (!looksLikeMonthGrid) return { startDate, endDate };
+    const anchor = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+    return monthDataRange(anchor);
+  }
+  function recurringInstanceId(event) {
+    return `${RECURRING_INSTANCE_PREFIX2}${encodeURIComponent(event.id)}:${event.startAt}`;
+  }
+  function readStoredSet(storage, key) {
+    try {
+      const value = JSON.parse(storage?.getItem(key) || "[]");
+      return new Set(Array.isArray(value) ? value.map(String) : []);
+    } catch {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function writeStoredSet(storage, key, set) {
+    try {
+      storage?.setItem(key, JSON.stringify([...set]));
+    } catch {
+    }
+  }
+  function isLocalHistoryId(value) {
+    return String(value || "").startsWith("local:") || String(value || "").startsWith("local-legacy:");
+  }
+  function normalizeRecurringInstances(events, knownSeriesIds = /* @__PURE__ */ new Set()) {
+    const counts = /* @__PURE__ */ new Map();
+    events.forEach((event) => counts.set(event.id, (counts.get(event.id) || 0) + 1));
+    counts.forEach((count, id) => {
+      if (count > 1) knownSeriesIds.add(id);
+    });
+    return events.map((event) => {
+      if (!knownSeriesIds.has(event.id)) return event;
+      return {
+        ...event,
+        calendarEventId: event.id,
+        id: recurringInstanceId(event),
+        isRecurring: true,
+        readOnly: true
+      };
+    });
+  }
+  function wrapRecurringAwareSource(source, knownSeriesIds) {
+    return new Proxy(source, {
+      get(target, property, receiver) {
+        if (property === "listEvents") {
+          return async (...args) => normalizeRecurringInstances(await target.listEvents(...args), knownSeriesIds);
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+  }
+  var ResponsiveLocalFirstCalendarRepository = class extends LocalFirstCalendarRepository {
+    constructor(source, options = {}) {
+      const knownRecurringSeriesIds = /* @__PURE__ */ new Set();
+      super(wrapRecurringAwareSource(source, knownRecurringSeriesIds), options);
+      this.knownRecurringSeriesIds = knownRecurringSeriesIds;
+      this.changeListeners = /* @__PURE__ */ new Set();
+      this.historyDeleteSyncing = false;
+      this.historyHiddenIdsKey = `${this.storageKey}:history-hidden-ids`;
+      this.historyHiddenMutationIdsKey = `${this.storageKey}:history-hidden-mutations`;
+      this.historyHiddenSemanticKeysKey = `${this.storageKey}:history-hidden-semantic`;
+      this.hiddenHistoryIds = readStoredSet(this.storage, this.historyHiddenIdsKey);
+      this.hiddenHistoryMutationIds = readStoredSet(this.storage, this.historyHiddenMutationIdsKey);
+      this.hiddenHistorySemanticKeys = readStoredSet(this.storage, this.historyHiddenSemanticKeysKey);
+      this.ensureHistoryIds();
+      queueMicrotask(() => this.syncHistoryDeletes());
+    }
+    onChange(listener) {
+      this.changeListeners.add(listener);
+      return () => this.changeListeners.delete(listener);
+    }
+    emitChange() {
+      this.changeListeners.forEach((listener) => {
+        try {
+          listener();
+        } catch {
+        }
+      });
+    }
+    getCachedEvents(startDate, endDate) {
+      const range = normalizeCalendarReadRange(startDate, endDate);
+      return super.getCachedEvents(range.startDate, range.endDate);
+    }
+    ensureHistoryIds() {
+      let changed = false;
+      this.history = this.history.map((entry, index) => {
+        if (entry?.historyId) return entry;
+        changed = true;
+        const key = encodeURIComponent(historySemanticKey(entry)).slice(0, 180);
+        return { ...entry, historyId: `local-legacy:${key}:${index}` };
+      });
+      if (changed) this.persist();
+    }
+    persistHistoryDeletionState() {
+      writeStoredSet(this.storage, this.historyHiddenIdsKey, this.hiddenHistoryIds);
+      writeStoredSet(this.storage, this.historyHiddenMutationIdsKey, this.hiddenHistoryMutationIds);
+      writeStoredSet(this.storage, this.historyHiddenSemanticKeysKey, this.hiddenHistorySemanticKeys);
+    }
+    markNewestLocalHistory(mutationId) {
+      const latest = this.history[0];
+      if (!latest?.localOnly) return;
+      this.history[0] = {
+        ...latest,
+        historyId: `local:${mutationId}`,
+        mutationId
+      };
+      this.persist();
+    }
+    createEventOptimistic(input) {
+      const result = super.createEventOptimistic(input);
+      this.markNewestLocalHistory(result.mutationId);
+      return result;
+    }
+    updateEventOptimistic(id, input) {
+      const result = super.updateEventOptimistic(id, input);
+      this.markNewestLocalHistory(result.mutationId);
+      return result;
+    }
+    deleteEventOptimistic(id) {
+      const result = super.deleteEventOptimistic(id);
+      this.markNewestLocalHistory(result.mutationId);
+      return result;
+    }
+    async refreshOneRange(startDate, endDate) {
+      const cached = this.getCachedEvents(startDate, endDate);
+      if (cached.isFresh) return cached.events;
+      const events = await super.refreshEvents(startDate, endDate);
+      this.emitChange();
+      return events;
+    }
+    async prefetchCurrentAndNextMonth() {
+      const now = new Date(this.now());
+      const ranges = [
+        monthDataRange(now),
+        monthDataRange(addMonths(now, 1))
+      ];
+      for (const range of ranges) {
+        try {
+          await this.refreshOneRange(range.startDate, range.endDate);
+        } catch {
+        }
+      }
+      return this.getCachedEvents(ranges[0].startDate, ranges[1].endDate).events;
+    }
+    async refreshEvents(startDate, endDate) {
+      if (rangeLengthDays(startDate, endDate) > BROAD_PREFETCH_DAYS) {
+        return this.prefetchCurrentAndNextMonth();
+      }
+      const range = normalizeCalendarReadRange(startDate, endDate);
+      return this.refreshOneRange(range.startDate, range.endDate);
+    }
+    async refreshHistory() {
+      const serverEntries = await this.source.listHistory(MAX_HISTORY2);
+      serverEntries.forEach((entry) => {
+        const mutationMatch = entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId));
+        const semantic = historySemanticKey(entry);
+        const semanticMatch = this.hiddenHistorySemanticKeys.has(semantic);
+        if (!mutationMatch && !semanticMatch) return;
+        if (entry.historyId) this.hiddenHistoryIds.add(String(entry.historyId));
+        if (mutationMatch) this.hiddenHistoryMutationIds.delete(String(entry.mutationId));
+        if (semanticMatch) this.hiddenHistorySemanticKeys.delete(semantic);
+      });
+      const localPending = this.history.filter((entry) => {
+        if (!entry.localOnly) return false;
+        if (entry.historyId && this.hiddenHistoryIds.has(String(entry.historyId))) return false;
+        if (entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId))) return false;
+        if (this.hiddenHistorySemanticKeys.has(historySemanticKey(entry))) return false;
+        return true;
+      });
+      const seen = /* @__PURE__ */ new Set();
+      this.history = [...serverEntries, ...localPending].filter((entry) => {
+        if (entry.historyId && this.hiddenHistoryIds.has(String(entry.historyId))) return false;
+        if (entry.mutationId && this.hiddenHistoryMutationIds.has(String(entry.mutationId))) return false;
+        if (this.hiddenHistorySemanticKeys.has(historySemanticKey(entry))) return false;
+        const key = entry.mutationId ? `mutation:${entry.mutationId}` : `semantic:${historySemanticKey(entry)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, MAX_HISTORY2);
+      this.persist();
+      this.persistHistoryDeletionState();
+      this.emitChange();
+      queueMicrotask(() => this.syncHistoryDeletes());
+      return this.history;
+    }
+    deleteHistoryOptimistic(historyIds) {
+      const ids = new Set((Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean));
+      if (!ids.size) return [];
+      const removed = this.history.filter((entry) => ids.has(String(entry.historyId || "")));
+      removed.forEach((entry) => {
+        const historyId = String(entry.historyId || "");
+        if (!isLocalHistoryId(historyId)) {
+          this.hiddenHistoryIds.add(historyId);
+        } else if (entry.mutationId) {
+          this.hiddenHistoryMutationIds.add(String(entry.mutationId));
+        } else {
+          this.hiddenHistorySemanticKeys.add(historySemanticKey(entry));
+        }
+      });
+      this.history = this.history.filter((entry) => !ids.has(String(entry.historyId || "")));
+      this.persist();
+      this.persistHistoryDeletionState();
+      this.emitChange();
+      queueMicrotask(() => this.syncHistoryDeletes());
+      return removed;
+    }
+    async syncHistoryDeletes() {
+      if (this.historyDeleteSyncing || !this.hiddenHistoryIds.size) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (typeof this.source.deleteHistory !== "function") return;
+      this.historyDeleteSyncing = true;
+      const ids = [...this.hiddenHistoryIds];
+      try {
+        await this.source.deleteHistory(ids);
+        ids.forEach((id) => this.hiddenHistoryIds.delete(id));
+        this.persistHistoryDeletionState();
+      } catch {
+      } finally {
+        this.historyDeleteSyncing = false;
+      }
+    }
+    rollback(op, error) {
+      const laterForSameTarget = this.outbox.slice(1).filter((item) => item.targetId === op.targetId);
+      if (op.kind === "create" && laterForSameTarget.length) {
+        const dependentIds = new Set(laterForSameTarget.map((item) => item.id));
+        this.outbox = this.outbox.filter((item) => !dependentIds.has(item.id));
+      }
+      if (op.kind === "update" && laterForSameTarget.length) {
+        this.outbox = this.outbox.filter((item) => item.id !== op.id);
+        this.persist();
+        this.emitChange();
+        return;
+      }
+      super.rollback(op, error);
+      this.emitChange();
+    }
+    async syncNow() {
+      if (this.syncing) return;
+      if (!this.outbox.length) {
+        this.syncHistoryDeletes();
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      this.syncing = true;
+      clearTimeout(this.retryTimer);
+      try {
+        while (this.outbox.length) {
+          const op = this.outbox[0];
+          if (op.nextAttemptAt && op.nextAttemptAt > this.now()) {
+            const delay = Math.max(50, op.nextAttemptAt - this.now());
+            clearTimeout(this.retryTimer);
+            this.retryTimer = setTimeout(() => this.syncNow(), delay);
+            break;
+          }
+          try {
+            await this.syncOperation(op);
+            this.outbox.shift();
+            this.persist();
+            this.emitChange();
+          } catch (error) {
+            if (error?.retryable !== false) {
+              this.scheduleRetry(op, error);
+              break;
+            }
+            this.rollback(op, error);
+          }
+        }
+      } finally {
+        this.syncing = false;
+      }
+      this.syncHistoryDeletes();
+      if (!this.outbox.length && (this.hiddenHistoryMutationIds.size || this.hiddenHistorySemanticKeys.size)) {
+        this.refreshHistory().catch(() => {
+        });
+      }
+    }
+  };
+
+  // src/services/history-v2-calendar-repository.js
+  var MAX_HISTORY3 = 50;
+  var DIRECT_SOURCE = "Google\u30AB\u30EC\u30F3\u30C0\u30FC\u76F4\u63A5\u64CD\u4F5C";
+  function readStoredSet2(storage, key) {
+    try {
+      const value = JSON.parse(storage?.getItem(key) || "[]");
+      return new Set(Array.isArray(value) ? value.map(String) : []);
+    } catch {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function writeStoredSet2(storage, key, set) {
+    try {
+      storage?.setItem(key, JSON.stringify([...set]));
+    } catch {
+    }
+  }
+  function historyMinute(value) {
+    const text = String(value || "");
+    if (!text) return "";
+    let timestamp = NaN;
+    if (/Z$/.test(text)) {
+      timestamp = Date.parse(text);
+    } else {
+      const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+      if (match) {
+        timestamp = Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00+09:00`);
+      }
+    }
+    return Number.isFinite(timestamp) ? String(Math.floor(timestamp / 6e4)) : text.slice(0, 16);
+  }
+  function historyLegacyOperationKey(entry) {
+    return [
+      entry?.action || "",
+      entry?.customerName || "",
+      entry?.startAt || "",
+      entry?.endAt || "",
+      historyMinute(entry?.timestamp)
+    ].join("|");
+  }
+  function historySortValue(entry) {
+    const minute = historyMinute(entry?.timestamp);
+    return /^\d+$/.test(minute) ? Number(minute) : 0;
+  }
+  function isServerHistory(entry) {
+    const id = String(entry?.historyId || "");
+    return Boolean(id && !id.startsWith("local:") && !id.startsWith("local-legacy:"));
+  }
+  function mergeHistoryV2(serverEntries, localEntries, isHidden = () => false) {
+    const combined = [
+      ...Array.isArray(serverEntries) ? serverEntries : [],
+      ...Array.isArray(localEntries) ? localEntries : []
+    ];
+    const seenMutations = /* @__PURE__ */ new Set();
+    const seenHistoryIds = /* @__PURE__ */ new Set();
+    const seenLegacy = /* @__PURE__ */ new Set();
+    const output = [];
+    combined.forEach((entry) => {
+      if (!entry || isHidden(entry)) return;
+      const mutationId = String(entry.mutationId || "");
+      const historyId = String(entry.historyId || "");
+      const legacyKey = historyLegacyOperationKey(entry);
+      if (mutationId && seenMutations.has(mutationId)) return;
+      if (historyId && seenHistoryIds.has(historyId)) return;
+      if (legacyKey && seenLegacy.has(legacyKey)) return;
+      if (mutationId) seenMutations.add(mutationId);
+      if (historyId) seenHistoryIds.add(historyId);
+      if (legacyKey) seenLegacy.add(legacyKey);
+      output.push(entry);
+    });
+    return output.sort((a, b) => historySortValue(b) - historySortValue(a)).slice(0, MAX_HISTORY3);
+  }
+  var HistoryV2CalendarRepository = class extends ResponsiveLocalFirstCalendarRepository {
+    constructor(source, options = {}) {
+      super(source, options);
+      this.historyPendingDeleteIdsKey = `${this.storageKey}:history-pending-delete-ids-v2`;
+      this.historyHiddenLegacyKeysKey = `${this.storageKey}:history-hidden-legacy-ops-v2`;
+      this.historyMigrationKey = `${this.storageKey}:history-migration-v2`;
+      this.pendingHistoryDeleteIds = readStoredSet2(this.storage, this.historyPendingDeleteIdsKey);
+      this.hiddenHistoryLegacyKeys = readStoredSet2(this.storage, this.historyHiddenLegacyKeysKey);
+      this.hiddenHistoryIds.forEach((id) => this.pendingHistoryDeleteIds.add(id));
+      this.migrateHistoryV2();
+      this.persistHistoryV2State();
+      queueMicrotask(() => this.syncHistoryDeletes());
+    }
+    persistHistoryV2State() {
+      this.persistHistoryDeletionState();
+      writeStoredSet2(this.storage, this.historyPendingDeleteIdsKey, this.pendingHistoryDeleteIds);
+      writeStoredSet2(this.storage, this.historyHiddenLegacyKeysKey, this.hiddenHistoryLegacyKeys);
+    }
+    migrateHistoryV2() {
+      if (this.storage?.getItem(this.historyMigrationKey) === "done") return;
+      const serverLike = this.history.filter((entry) => isServerHistory(entry));
+      const localLike = this.history.filter((entry) => !isServerHistory(entry));
+      this.history = mergeHistoryV2(serverLike, localLike, (entry) => this.isHistoryHidden(entry));
+      this.persist();
+      try {
+        this.storage?.setItem(this.historyMigrationKey, "done");
+      } catch {
+      }
+    }
+    isHistoryHidden(entry) {
+      const historyId = String(entry?.historyId || "");
+      const mutationId = String(entry?.mutationId || "");
+      return Boolean(
+        historyId && this.hiddenHistoryIds.has(historyId) || mutationId && this.hiddenHistoryMutationIds.has(mutationId) || this.hiddenHistorySemanticKeys.has(historySemanticKey(entry)) || this.hiddenHistoryLegacyKeys.has(historyLegacyOperationKey(entry))
+      );
+    }
+    hideHistoryEntry(entry, { queueServerDelete = true } = {}) {
+      if (!entry) return;
+      const historyId = String(entry.historyId || "");
+      const mutationId = String(entry.mutationId || "");
+      const legacyKey = historyLegacyOperationKey(entry);
+      if (historyId && isServerHistory(entry)) {
+        this.hiddenHistoryIds.add(historyId);
+        if (queueServerDelete) this.pendingHistoryDeleteIds.add(historyId);
+      }
+      if (mutationId) this.hiddenHistoryMutationIds.add(mutationId);
+      if (legacyKey) this.hiddenHistoryLegacyKeys.add(legacyKey);
+      this.hiddenHistorySemanticKeys.add(historySemanticKey(entry));
+    }
+    isLegacyRecurringAudit(entry) {
+      if (entry?.source !== DIRECT_SOURCE || entry?.action !== "\u5909\u66F4") return false;
+      const eventId = String(entry?.id || "");
+      return Boolean(eventId && this.knownRecurringSeriesIds.has(eventId));
+    }
+    purgeKnownRecurringHistory() {
+      let changed = false;
+      this.history.forEach((entry) => {
+        if (!this.isLegacyRecurringAudit(entry)) return;
+        this.hideHistoryEntry(entry);
+        changed = true;
+      });
+      if (!changed) return;
+      this.history = this.history.filter((entry) => !this.isLegacyRecurringAudit(entry));
+      this.persist();
+      this.persistHistoryV2State();
+      this.emitChange();
+      queueMicrotask(() => this.syncHistoryDeletes());
+    }
+    async refreshOneRange(startDate, endDate) {
+      const events = await super.refreshOneRange(startDate, endDate);
+      let discovered = false;
+      events.forEach((event) => {
+        if (!event?.isRecurring) return;
+        const seriesId = String(event.calendarEventId || event.id || "");
+        if (!seriesId || this.knownRecurringSeriesIds.has(seriesId)) return;
+        this.knownRecurringSeriesIds.add(seriesId);
+        discovered = true;
+      });
+      if (discovered) this.purgeKnownRecurringHistory();
+      return events;
+    }
+    async refreshHistory() {
+      const serverEntries = await this.source.listHistory(MAX_HISTORY3);
+      const visibleServer = [];
+      serverEntries.forEach((entry) => {
+        if (this.isLegacyRecurringAudit(entry) || this.isHistoryHidden(entry)) {
+          this.hideHistoryEntry(entry);
+          return;
+        }
+        visibleServer.push(entry);
+      });
+      const localPending = this.history.filter((entry) => entry.localOnly && !this.isHistoryHidden(entry));
+      this.history = mergeHistoryV2(visibleServer, localPending, (entry) => this.isHistoryHidden(entry));
+      this.persist();
+      this.persistHistoryV2State();
+      this.emitChange();
+      queueMicrotask(() => this.syncHistoryDeletes());
+      return this.history;
+    }
+    deleteHistoryOptimistic(historyIds) {
+      const ids = new Set((Array.isArray(historyIds) ? historyIds : [historyIds]).map(String).filter(Boolean));
+      if (!ids.size) return [];
+      const removed = this.history.filter((entry) => ids.has(String(entry.historyId || "")));
+      removed.forEach((entry) => this.hideHistoryEntry(entry));
+      this.history = this.history.filter((entry) => !ids.has(String(entry.historyId || "")));
+      this.persist();
+      this.persistHistoryV2State();
+      this.emitChange();
+      queueMicrotask(() => this.syncHistoryDeletes());
+      return removed;
+    }
+    promoteMutationHistory(mutationId, serverHistory) {
+      const id = String(mutationId || "");
+      if (!id) return;
+      const localEntry = this.history.find((entry) => String(entry.mutationId || "") === id);
+      if (this.hiddenHistoryMutationIds.has(id) || localEntry && this.isHistoryHidden(localEntry)) {
+        if (serverHistory) this.hideHistoryEntry({ ...serverHistory, mutationId: serverHistory.mutationId || id });
+        this.history = this.history.filter((entry) => String(entry.mutationId || "") !== id);
+        this.persist();
+        this.persistHistoryV2State();
+        queueMicrotask(() => this.syncHistoryDeletes());
+        return;
+      }
+      if (!serverHistory) return;
+      const canonical = { ...serverHistory, mutationId: serverHistory.mutationId || id, localOnly: false };
+      const legacyKey = historyLegacyOperationKey(canonical);
+      this.history = this.history.filter((entry) => String(entry.mutationId || "") !== id && historyLegacyOperationKey(entry) !== legacyKey);
+      this.history = mergeHistoryV2([canonical], this.history, (entry) => this.isHistoryHidden(entry));
+      this.persist();
+    }
+    async syncHistoryDeletes() {
+      if (this.historyDeleteSyncing || !this.pendingHistoryDeleteIds.size) return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (typeof this.source.deleteHistory !== "function" && typeof this.source.deleteHistoryResult !== "function") return;
+      this.historyDeleteSyncing = true;
+      const ids = [...this.pendingHistoryDeleteIds].slice(0, MAX_HISTORY3);
+      try {
+        let acknowledged = [];
+        if (typeof this.source.deleteHistoryResult === "function") {
+          const result = await this.source.deleteHistoryResult(ids);
+          acknowledged = result?.acknowledged || result?.deleted || [];
+        } else {
+          acknowledged = await this.source.deleteHistory(ids);
+        }
+        acknowledged.map(String).forEach((id) => this.pendingHistoryDeleteIds.delete(id));
+        this.persistHistoryV2State();
+      } catch {
+      } finally {
+        this.historyDeleteSyncing = false;
+      }
+    }
+    async syncOperation(op) {
+      if (op.kind === "create") {
+        const result = typeof this.source.createEventWithHistory === "function" ? await this.source.createEventWithHistory(op.input, { mutationId: op.id }) : { event: await this.source.createEvent(op.input, { mutationId: op.id }), history: null };
+        const serverEvent = result.event;
+        const oldId = op.targetId;
+        const later = this.outbox.slice(1).filter((item) => item.targetId === oldId);
+        this.rewriteTargetId(oldId, serverEvent.id);
+        const current = this.getEventCached(oldId);
+        this.removeRecord(oldId);
+        if (!later.some((item) => item.kind === "delete")) {
+          this.upsertRecord(later.length && current ? { ...current, id: serverEvent.id, syncState: "pending", source: "local-first" } : { ...serverEvent, syncState: void 0 });
+        }
+        this.promoteMutationHistory(op.id, result.history);
+        return;
+      }
+      if (op.kind === "update") {
+        const result = typeof this.source.updateEventWithHistory === "function" ? await this.source.updateEventWithHistory(op.targetId, op.input, { mutationId: op.id }) : { event: await this.source.updateEvent(op.targetId, op.input, { mutationId: op.id }), history: null };
+        const hasLater = this.outbox.slice(1).some((item) => item.targetId === op.targetId);
+        if (!hasLater) this.upsertRecord({ ...result.event, syncState: void 0 });
+        this.promoteMutationHistory(op.id, result.history);
+        return;
+      }
+      if (op.kind === "delete") {
+        const result = typeof this.source.deleteEventWithHistory === "function" ? await this.source.deleteEventWithHistory(op.targetId, { mutationId: op.id }) : (await this.source.deleteEvent(op.targetId, { mutationId: op.id }), { history: null });
+        this.promoteMutationHistory(op.id, result.history);
+      }
+    }
+  };
+
+  // src/services/startup-priority-calendar-repository.js
+  var BROAD_STARTUP_RANGE_DAYS = 90;
+  var IDLE_TIMEOUT_MS = 1200;
+  var FALLBACK_DELAY_MS = 350;
+  var DAY_MS = 864e5;
+  function rangeLengthDays2(startDate, endDate) {
+    const start = Date.parse(`${startDate}T00:00:00Z`);
+    const end = Date.parse(`${endDate}T00:00:00Z`);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+    return Math.round((end - start) / DAY_MS);
+  }
+  function scheduleStartupBackgroundTask(callback, {
+    windowRef = globalThis.window,
+    timeout = IDLE_TIMEOUT_MS,
+    fallbackDelay = FALLBACK_DELAY_MS
+  } = {}) {
+    if (typeof windowRef?.requestIdleCallback === "function") {
+      const id = windowRef.requestIdleCallback(callback, { timeout });
+      return () => windowRef.cancelIdleCallback?.(id);
+    }
+    const timer = globalThis.setTimeout(callback, fallbackDelay);
+    return () => globalThis.clearTimeout(timer);
+  }
+  function withStartupPriority(repository2, { windowRef = globalThis.window } = {}) {
+    let initialHistoryDeferred = false;
+    let cancelDeferredHistory = null;
+    let broadRefreshScheduled = false;
+    const schedule = (callback, options = {}) => scheduleStartupBackgroundTask(callback, { windowRef, ...options });
+    return new Proxy(repository2, {
+      get(target, property, receiver) {
+        if (property === "refreshEvents") {
+          return (startDate, endDate) => {
+            const broadStartupRead = rangeLengthDays2(startDate, endDate) > BROAD_STARTUP_RANGE_DAYS;
+            if (!broadStartupRead) return target.refreshEvents(startDate, endDate);
+            if (!broadRefreshScheduled) {
+              broadRefreshScheduled = true;
+              schedule(() => {
+                broadRefreshScheduled = false;
+                target.refreshEvents(startDate, endDate).catch(() => {
+                });
+              }, { timeout: 900, fallbackDelay: 250 });
+            }
+            return Promise.resolve(target.getCachedEvents(startDate, endDate)?.events || []);
+          };
+        }
+        if (property === "refreshHistory") {
+          return (...args) => {
+            const historyIsVisible = /^#\/history(?:$|[/?])/.test(String(windowRef?.location?.hash || ""));
+            if (!initialHistoryDeferred && !historyIsVisible) {
+              initialHistoryDeferred = true;
+              cancelDeferredHistory = schedule(() => {
+                cancelDeferredHistory = null;
+                target.refreshHistory(...args).catch(() => {
+                });
+              }, { timeout: 1600, fallbackDelay: 700 });
+              return Promise.resolve(target.getCachedHistory?.() || []);
+            }
+            if (cancelDeferredHistory) {
+              cancelDeferredHistory();
+              cancelDeferredHistory = null;
+            }
+            return target.refreshHistory(...args);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+  }
 
   // src/services/repository-factory.js
   function createCalendarRepository() {
@@ -636,9 +1862,9 @@
         storageKey: "tamafit_staff_calendar_mock_cache_v1"
       });
     }
-    return new CachedCalendarRepository(new GoogleCalendarRepository(), {
-      storageKey: "tamafit_staff_calendar_google_cache_v1"
-    });
+    return withStartupPriority(new HistoryV2CalendarRepository(new GoogleCalendarRepository(), {
+      storageKey: "tamafit_staff_calendar_local_first_v1"
+    }));
   }
 
   // src/utils/html.js
@@ -732,7 +1958,7 @@
       <div class="form-heading">
         <p class="eyebrow">${isEditing ? "\u4E88\u7D04\u5185\u5BB9\u306E\u5909\u66F4" : "\u65B0\u3057\u3044\u4E88\u7D04"}</p>
         <h1>${isEditing ? "\u4E88\u7D04\u3092\u7DE8\u96C6" : "\u4E88\u7D04\u3092\u8FFD\u52A0"}</h1>
-        <p>\u5FC5\u8981\u306A\u5185\u5BB9\u3060\u3051\u5165\u529B\u3057\u3066\u3001Google\u30AB\u30EC\u30F3\u30C0\u30FC\u3068\u540C\u3058\u611F\u899A\u3067\u767B\u9332\u3067\u304D\u307E\u3059\u3002</p>
+        <p>\u4FDD\u5B58\u3059\u308B\u3068\u3059\u3050\u753B\u9762\u306B\u53CD\u6620\u3055\u308C\u3001Google\u30AB\u30EC\u30F3\u30C0\u30FC\u3068\u306E\u540C\u671F\u306F\u88CF\u5074\u3067\u884C\u308F\u308C\u307E\u3059\u3002</p>
       </div>
 
       <form class="booking-form" id="bookingForm" data-event-id="${escapeAttribute(event?.id || "")}">
@@ -793,7 +2019,7 @@
 
         <div class="form-actions">
           ${isEditing ? `<button class="button button--danger" type="button" data-action="delete-booking" data-id="${escapeAttribute(event.id)}">\u4E88\u7D04\u3092\u524A\u9664</button>` : ""}
-          <button class="button button--primary ${isEditing ? "" : "button--wide"}" type="submit">\u4E88\u7D04\u5185\u5BB9\u3092\u78BA\u8A8D\u3059\u308B</button>
+          <button class="button button--primary ${isEditing ? "" : "button--wide"}" type="submit">${isEditing ? "\u5909\u66F4\u3092\u4FDD\u5B58" : "\u4E88\u7D04\u3059\u308B"}</button>
         </div>
       </form>
     </section>
@@ -811,9 +2037,11 @@
     const trainer = TRAINERS.find((item) => item.id === event.trainerId);
     const type = getBookingType(event.type);
     const isCustomerReservation = ["member", "trial", "consultation"].includes(event.type);
-    const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
+    const color = event.type === "trial" ? "amber" : trainer?.color || "neutral";
+    const isRecurring = Boolean(event.isRecurring);
+    const actionAttributes = isRecurring ? 'aria-disabled="true" title="\u7E70\u308A\u8FD4\u3057\u4E88\u5B9A\u306FGoogle\u30AB\u30EC\u30F3\u30C0\u30FC\u304B\u3089\u7DE8\u96C6\u3057\u3066\u304F\u3060\u3055\u3044"' : `data-action="edit-booking" data-id="${event.id}"`;
     return `
-    <button class="day-event day-event--${color}" type="button" data-action="edit-booking" data-id="${event.id}">
+    <button class="day-event day-event--${color}${isRecurring ? " is-readonly" : ""}" type="button" ${actionAttributes}>
       <span class="day-event__time">
         <strong>${event.startAt.slice(11, 16)}</strong>
         <small>${event.endAt.slice(11, 16)}</small>
@@ -823,15 +2051,22 @@
         <span class="day-event__badges">
           <small>${escapeHtml(trainer?.name || "\u6307\u5B9A\u306A\u3057")}</small>
           <small>${escapeHtml(type.name)}</small>
+          ${isRecurring ? "<small>\u5B9A\u671F</small>" : ""}
         </span>
         <strong>${escapeHtml(isCustomerReservation ? `${event.customerName} \u69D8` : event.customerName)}</strong>
         <span>${event.duration}\u5206${event.notes ? `\u30FB${escapeHtml(event.notes)}` : ""}</span>
       </span>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      ${isRecurring ? '<span class="sync-badge" aria-label="Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306E\u7E70\u308A\u8FD4\u3057\u4E88\u5B9A">\u5B9A\u671F</span>' : `<span class="day-event__manage" aria-label="\u30BF\u30C3\u30D7\u3057\u3066\u5909\u66F4\u307E\u305F\u306F\u524A\u9664">
+            <span class="day-event__manage-edit">\u5909\u66F4</span>
+            <span class="day-event__manage-separator">\u30FB</span>
+            <span class="day-event__manage-delete">\u524A\u9664</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+          </span>`}
     </button>
   `;
   }
-  function renderDayView(date, events, { isRefreshing = false } = {}) {
+  function renderDayView(date, events) {
+    const isoDate = toISODate(date);
     const content = `
     <section class="day-view">
       <div class="day-summary">
@@ -852,13 +2087,19 @@
         `}
       </div>
 
-      <button class="button button--primary button--wide day-add-button" type="button" data-action="new-booking" data-date="${toISODate(date)}">
+      <button class="button button--wide day-add-button day-standard-booking-button" type="button" data-action="new-booking" data-date="${isoDate}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         \u3053\u306E\u65E5\u306B\u4E88\u7D04\u3092\u8FFD\u52A0
       </button>
-      <button class="history-link" type="button" data-action="open-history">
-        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
-        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
+      <button class="button button--wide day-quick-booking-button" type="button" data-quick-booking data-date="${isoDate}">
+        <span class="day-quick-booking-button__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M13 2 5 14h7l-1 8 8-12h-7l1-8Z"/></svg>
+        </span>
+        <span class="day-quick-booking-button__copy">
+          <strong>\u30AF\u30A4\u30C3\u30AF\u4E88\u7D04</strong>
+          <small>\u65E5\u4ED8\u3068\u6642\u9593\u3060\u3051\u3067\u767B\u9332</small>
+        </span>
+        <svg class="day-quick-booking-button__arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
       </button>
     </section>
   `;
@@ -866,49 +2107,166 @@
       title: "\u4E88\u7D04\u4E00\u89A7",
       subtitle: formatDayTitle(date),
       backAction: "back-to-calendar",
-      showAdd: false,
-      isRefreshing
+      showAdd: false
     });
   }
 
-  // src/views/history-view.js
-  function actionLabel(action) {
-    return { "\u4F5C\u6210": "\u4E88\u7D04\u3092\u8FFD\u52A0", "\u5909\u66F4": "\u4E88\u7D04\u3092\u5909\u66F4", "\u524A\u9664": "\u4E88\u7D04\u3092\u524A\u9664" }[action] || action;
+  // src/history-ui.js
+  var HISTORY_PREVIEW_LIMIT = 10;
+  function historyActionLabel(action) {
+    return {
+      "\u4F5C\u6210": "\u65B0\u898F\u4E88\u7D04",
+      "\u5909\u66F4": "\u5185\u5BB9\u5909\u66F4",
+      "\u524A\u9664": "\u4E88\u7D04\u524A\u9664"
+    }[action] || String(action || "\u64CD\u4F5C");
   }
-  function actionClass(action) {
+  function historyActionClass(action) {
     return { "\u4F5C\u6210": "create", "\u5909\u66F4": "update", "\u524A\u9664": "delete" }[action] || "other";
   }
-  function formatTimestamp(value) {
-    return String(value || "").replace("T", " ").replace(/\.\d+Z$/, "");
+  function datePartsFromLocalTimestamp(value) {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    if (!match) return null;
+    return {
+      month: Number(match[2]),
+      day: Number(match[3]),
+      hour: match[4],
+      minute: match[5]
+    };
   }
-  function renderEntry(entry) {
+  function formatHistoryTimestamp(value) {
+    const text = String(value || "");
+    if (!text) return "\u65E5\u6642\u4E0D\u660E";
+    if (/Z$/.test(text)) {
+      const date = new Date(text);
+      if (!Number.isNaN(date.getTime())) {
+        return new Intl.DateTimeFormat("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          month: "numeric",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false
+        }).format(date);
+      }
+    }
+    const parts = datePartsFromLocalTimestamp(text);
+    if (!parts) return text.slice(0, 16);
+    return `${parts.month}/${parts.day} ${parts.hour}:${parts.minute}`;
+  }
+  function formatHistoryClock(value) {
+    const formatted = formatHistoryTimestamp(value);
+    const match = formatted.match(/(\d{1,2}:\d{2})$/);
+    return match ? match[1] : formatted;
+  }
+  function renderRecentHistory(entries, limit = HISTORY_PREVIEW_LIMIT) {
+    const recent = (Array.isArray(entries) ? entries : []).slice(0, limit);
+    const rows = recent.length ? recent.map((entry) => `
+        <div class="recent-history__row">
+          <time>${escapeHtml(formatHistoryClock(entry.timestamp))}</time>
+          <strong title="${escapeAttribute(entry.customerName || "\u540D\u79F0\u306A\u3057")}">${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</strong>
+          <span>${escapeHtml(historyActionLabel(entry.action))}</span>
+        </div>
+      `).join("") : `<p class="recent-history__empty">\u64CD\u4F5C\u5C65\u6B74\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093</p>`;
     return `
-    <article class="history-entry history-entry--${actionClass(entry.action)}">
-      <div class="history-entry__topline">
-        <strong>${escapeHtml(actionLabel(entry.action))}</strong>
-        <time>${escapeHtml(formatTimestamp(entry.timestamp))}</time>
+    <section class="recent-history" aria-label="\u6700\u8FD1\u306E\u64CD\u4F5C\u30ED\u30B0">
+      <div class="recent-history__heading">
+        <strong>\u6700\u8FD1\u306E\u64CD\u4F5C\u30ED\u30B0</strong>
+        <span>${HISTORY_PREVIEW_LIMIT}\u4EF6</span>
       </div>
-      <h2>${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</h2>
-      <p>${escapeHtml(String(entry.startAt || "").replace("T", " ").slice(0, 16))}\u301C${escapeHtml(String(entry.endAt || "").slice(11, 16))}</p>
-      <div class="history-entry__meta">
-        <span>\u64CD\u4F5C\uFF1A${escapeHtml(entry.source || "\u4E0D\u660E")}</span>
-        <span>${escapeHtml(entry.trainerName || "\u6307\u5B9A\u306A\u3057")}</span>
-        <span>${escapeHtml(entry.typeName || "\u4E88\u5B9A")}</span>
-      </div>
-      ${entry.beforeSummary ? `<p class="history-entry__before">\u5909\u66F4\u524D\uFF1A${escapeHtml(entry.beforeSummary)}</p>` : ""}
+      <div class="recent-history__list">${rows}</div>
+      <button class="recent-history__more" type="button" data-action="open-history">
+        \u5C65\u6B74\u3092\u3059\u3079\u3066\u898B\u308B
+        <span aria-hidden="true">\u203A</span>
+      </button>
+    </section>
+  `;
+  }
+
+  // src/views/history-view.js
+  function bookingRange(entry) {
+    const start = String(entry.startAt || "").replace("T", " ").slice(0, 16);
+    const end = String(entry.endAt || "").slice(11, 16);
+    return `${start}\u301C${end}`;
+  }
+  function renderOrganizeEntry(entry) {
+    const historyId = String(entry.historyId || "");
+    const manageable = Boolean(historyId);
+    return `
+    <article class="history-entry history-entry--${historyActionClass(entry.action)} is-organizing-row" data-history-entry="${escapeAttribute(historyId)}">
+      <label class="history-entry__organize-row">
+        ${manageable ? `
+          <span class="history-entry__select" aria-label="\u3053\u306E\u5C65\u6B74\u3092\u9078\u629E">
+            <input type="checkbox" data-history-select value="${escapeAttribute(historyId)}">
+            <span aria-hidden="true"></span>
+          </span>
+        ` : '<span class="history-entry__select-placeholder" aria-hidden="true"></span>'}
+        <time>${escapeHtml(formatHistoryTimestamp(entry.timestamp))}</time>
+        <strong title="${escapeAttribute(entry.customerName || "\u540D\u79F0\u306A\u3057")}">${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</strong>
+        <span>${escapeHtml(historyActionLabel(entry.action))}</span>
+      </label>
     </article>
   `;
   }
-  function renderHistoryView(entries) {
+  function renderEntry(entry, { organizing = false } = {}) {
+    if (organizing) return renderOrganizeEntry(entry);
+    const historyId = String(entry.historyId || "");
+    const manageable = Boolean(historyId);
+    return `
+    <details class="history-entry history-entry--${historyActionClass(entry.action)}" data-history-entry="${escapeAttribute(historyId)}">
+      <summary class="history-entry__summary">
+        <time>${escapeHtml(formatHistoryTimestamp(entry.timestamp))}</time>
+        <strong title="${escapeAttribute(entry.customerName || "\u540D\u79F0\u306A\u3057")}">${escapeHtml(entry.customerName || "\u540D\u79F0\u306A\u3057")}</strong>
+        <span>${escapeHtml(historyActionLabel(entry.action))}</span>
+        <i aria-hidden="true">\u203A</i>
+      </summary>
+      <div class="history-entry__details">
+        <div class="history-entry__details-line">
+          <span>\u4E88\u7D04</span>
+          <strong>${escapeHtml(bookingRange(entry))}</strong>
+        </div>
+        <div class="history-entry__details-line">
+          <span>\u64CD\u4F5C</span>
+          <strong>${escapeHtml(entry.source || "\u4E0D\u660E")}</strong>
+        </div>
+        <div class="history-entry__details-line">
+          <span>\u62C5\u5F53</span>
+          <strong>${escapeHtml(entry.trainerName || "\u6307\u5B9A\u306A\u3057")}</strong>
+        </div>
+        <div class="history-entry__details-line">
+          <span>\u7A2E\u985E</span>
+          <strong>${escapeHtml(entry.typeName || "\u4E88\u5B9A")}</strong>
+        </div>
+        ${entry.beforeSummary ? `
+          <div class="history-entry__details-line history-entry__before">
+            <span>\u5909\u66F4\u524D</span>
+            <strong>${escapeHtml(entry.beforeSummary)}</strong>
+          </div>
+        ` : ""}
+        ${manageable ? `
+          <button class="history-entry__delete" type="button" data-action="delete-history-one" data-history-id="${escapeAttribute(historyId)}">\u3053\u306E\u8A18\u9332\u3092\u524A\u9664</button>
+        ` : ""}
+      </div>
+    </details>
+  `;
+  }
+  function renderHistoryView(entries, { organizing = false } = {}) {
+    const safeEntries = Array.isArray(entries) ? entries : [];
     const content = `
-    <section class="history-view">
+    <section class="history-view ${organizing ? "is-organizing" : ""}">
       <div class="history-heading">
-        <p class="eyebrow">\u4F5C\u6210\u30FB\u5909\u66F4\u30FB\u524A\u9664</p>
-        <h1>\u64CD\u4F5C\u5C65\u6B74</h1>
-        <p>\u6700\u65B050\u4EF6\u3092\u65B0\u3057\u3044\u9806\u306B\u8868\u793A\u3057\u307E\u3059\u3002</p>
+        <div class="history-heading__copy">
+          <p class="eyebrow">\u4E88\u7D04\u64CD\u4F5C\u306E\u8A18\u9332</p>
+          <h1>\u64CD\u4F5C\u5C65\u6B74</h1>
+          <p>\u6700\u65B050\u4EF6\u3092\u65B0\u3057\u3044\u9806\u306B\u8868\u793A\u3057\u307E\u3059\u3002\u5C65\u6B74\u3092\u6D88\u3057\u3066\u3082\u4E88\u7D04\u81EA\u4F53\u306B\u306F\u5F71\u97FF\u3057\u307E\u305B\u3093\u3002</p>
+        </div>
+        ${safeEntries.length ? `
+          <button class="history-organize-button" type="button" data-action="${organizing ? "history-organize-cancel" : "history-organize"}">
+            ${organizing ? "\u5B8C\u4E86" : "\u5C65\u6B74\u3092\u6574\u7406"}
+          </button>
+        ` : ""}
       </div>
       <div class="history-list">
-        ${entries.length ? entries.map(renderEntry).join("") : `
+        ${safeEntries.length ? safeEntries.map((entry) => renderEntry(entry, { organizing })).join("") : `
           <div class="empty-day">
             <span aria-hidden="true">i</span>
             <h2>\u64CD\u4F5C\u5C65\u6B74\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093</h2>
@@ -916,6 +2274,12 @@
           </div>
         `}
       </div>
+      ${organizing && safeEntries.length ? `
+        <div class="history-selection-bar">
+          <span><strong data-history-selected-count>0</strong>\u4EF6\u3092\u9078\u629E</span>
+          <button type="button" data-action="delete-history-selected" disabled>\u9078\u629E\u3057\u305F\u5C65\u6B74\u3092\u524A\u9664</button>
+        </div>
+      ` : ""}
     </section>
   `;
     return renderAppShell(content, {
@@ -939,14 +2303,14 @@
     const trainer = TRAINERS.find((item) => item.id === event.trainerId);
     const time = event.startAt.slice(11, 16);
     const displayName = Array.from(event.customerName.split(/[ 　]/)[0]).slice(0, 2).join("");
-    const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
+    const color = event.type === "trial" ? "amber" : trainer?.color || "neutral";
     return `
     <span class="month-event month-event--${color}" title="${escapeAttribute(`${time} ${event.customerName}`)}">
       <b>${escapeHtml(time)}</b><span>${escapeHtml(displayName)}</span>
     </span>
   `;
   }
-  function renderMonthView(anchorDate, events, { isRefreshing = false } = {}) {
+  function renderMonthView(anchorDate, events, history2 = []) {
     const days = getMonthGrid(anchorDate);
     const eventsByDate = groupEvents(events);
     const currentMonth = anchorDate.getMonth();
@@ -982,7 +2346,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="today">\u4ECA\u65E5</button>
+        <button class="today-button" type="button" data-action="today">\u4ECA\u6708\u3078\u623B\u308B</button>
       </div>
 
       <div class="view-switch" aria-label="\u30AB\u30EC\u30F3\u30C0\u30FC\u8868\u793A">
@@ -997,17 +2361,15 @@
         <div class="month-grid">${calendarCells}</div>
       </div>
 
+      ${renderRecentHistory(history2)}
+
       <div class="calendar-legend" aria-label="\u62C5\u5F53\u30C8\u30EC\u30FC\u30CA\u30FC\u306E\u8272\u5206\u3051">
         ${TRAINERS.map((trainer) => `<span><i class="legend-dot legend-dot--${trainer.color}"></i>${escapeHtml(trainer.name)}</span>`).join("")}
         <span><i class="legend-dot legend-dot--amber"></i>\u4F53\u9A13</span>
       </div>
-      <button class="history-link" type="button" data-action="open-history">
-        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
-        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
-      </button>
     </section>
   `;
-    return renderAppShell(content, { isRefreshing });
+    return renderAppShell(content);
   }
 
   // src/views/week-view.js
@@ -1021,7 +2383,7 @@
   }
   function renderWeekEvent(event) {
     const trainer = TRAINERS.find((item) => item.id === event.trainerId);
-    const color = event.type === "blocked" ? "neutral" : event.type === "trial" ? "amber" : trainer?.color || "neutral";
+    const color = event.type === "trial" ? "amber" : trainer?.color || "neutral";
     return `
     <div class="week-event week-event--${color}">
       <time>${event.startAt.slice(11, 16)}</time>
@@ -1032,7 +2394,7 @@
     </div>
   `;
   }
-  function renderWeekView(anchorDate, events, { isRefreshing = false } = {}) {
+  function renderWeekView(anchorDate, events, history2 = []) {
     const days = getWeekDays(anchorDate);
     const grouped = groupEvents2(events);
     const dayRows = days.map((date) => {
@@ -1063,7 +2425,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
           </button>
         </div>
-        <button class="today-button" type="button" data-action="go-home">\u30DB\u30FC\u30E0</button>
+        <button class="today-button" type="button" data-action="go-home">\u4ECA\u6708\u3078\u623B\u308B</button>
       </div>
 
       <div class="view-switch" aria-label="\u30AB\u30EC\u30F3\u30C0\u30FC\u8868\u793A">
@@ -1072,13 +2434,10 @@
       </div>
 
       <div class="week-list">${dayRows}</div>
-      <button class="history-link" type="button" data-action="open-history">
-        \u64CD\u4F5C\u5C65\u6B74\u3092\u307F\u308B
-        <span>\u8FFD\u52A0\u30FB\u5909\u66F4\u30FB\u524A\u9664\u306E\u8A18\u9332</span>
-      </button>
+      ${renderRecentHistory(history2)}
     </section>
   `;
-    return renderAppShell(content, { isRefreshing });
+    return renderAppShell(content);
   }
 
   // src/app.js
@@ -1226,17 +2585,17 @@
   function getReturnLocation(fallbackDate = /* @__PURE__ */ new Date()) {
     return sessionStorage.getItem("tamafit_calendar_return_hash") || lastCalendarHash || `#/month/${monthRouteValue(fallbackDate)}`;
   }
-  function showToast(message, { duration = 2800, actionLabel: actionLabel2 = "", onAction = null } = {}) {
+  function showToast(message, { duration = 2800, actionLabel = "", onAction = null } = {}) {
     clearTimeout(toastTimer);
     toast.replaceChildren();
     const text = document.createElement("span");
     text.textContent = message;
     toast.append(text);
-    if (actionLabel2 && onAction) {
+    if (actionLabel && onAction) {
       const actionButton = document.createElement("button");
       actionButton.className = "toast__action";
       actionButton.type = "button";
-      actionButton.textContent = actionLabel2;
+      actionButton.textContent = actionLabel;
       actionButton.addEventListener("click", async () => {
         clearTimeout(toastTimer);
         actionButton.disabled = true;
@@ -1297,6 +2656,67 @@
       confirmButton.addEventListener("click", onConfirm);
       confirmDialog.addEventListener("cancel", onCancel);
       confirmDialog.showModal();
+    });
+  }
+  function ensureSyncErrorDialog() {
+    let dialog = document.getElementById("syncErrorDialog");
+    if (dialog) return dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+    <dialog class="confirm-dialog sync-error-dialog" id="syncErrorDialog">
+      <div class="confirm-dialog__body">
+        <p class="eyebrow">\u540C\u671F\u30A8\u30E9\u30FC</p>
+        <h2 data-sync-error-title>Google\u30AB\u30EC\u30F3\u30C0\u30FC\u306B\u53CD\u6620\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F</h2>
+        <div class="confirm-dialog__summary" data-sync-error-summary></div>
+        <div class="confirm-dialog__actions is-single">
+          <button class="button button--danger-solid button--wide" type="button" data-sync-error-close>\u78BA\u8A8D\u3057\u307E\u3057\u305F</button>
+        </div>
+      </div>
+    </dialog>
+  `);
+    dialog = document.getElementById("syncErrorDialog");
+    const close = () => {
+      if (dialog.open) dialog.close();
+    };
+    dialog.addEventListener("click", (event) => {
+      if (event.target.closest("[data-sync-error-close]")) close();
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      close();
+    });
+    return dialog;
+  }
+  function showSyncError({ title, event, error, rollbackMessage }) {
+    const dialog = ensureSyncErrorDialog();
+    const reason = escapeHtml(error?.message || "Google\u30AB\u30EC\u30F3\u30C0\u30FC\u3068\u306E\u901A\u4FE1\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+    const name = escapeHtml(event?.customerName || "\u4E88\u7D04");
+    const date = escapeHtml(String(event?.startAt || "").slice(0, 10));
+    const time = escapeHtml(String(event?.startAt || "").slice(11, 16));
+    dialog.querySelector("[data-sync-error-title]").textContent = title;
+    dialog.querySelector("[data-sync-error-summary]").innerHTML = `
+    <div class="sync-error-message">
+      <p><strong>${name}</strong>${date && time ? `<br>${date} ${time}` : ""}</p>
+      <p>${escapeHtml(rollbackMessage)}</p>
+      <p class="sync-error-message__reason">\u7406\u7531\uFF1A${reason}</p>
+    </div>
+  `;
+    if (!dialog.open) dialog.showModal();
+  }
+  function rerenderCalendarIfVisible() {
+    const route = parseRoute();
+    if (["month", "week", "day"].includes(route.name)) {
+      void renderRoute();
+    }
+  }
+  function observeMutation(mutation, { title, rollbackMessage }) {
+    mutation.committed.then(() => rerenderCalendarIfVisible()).catch((error) => {
+      rerenderCalendarIfVisible();
+      showSyncError({
+        title,
+        event: mutation.event,
+        error,
+        rollbackMessage
+      });
     });
   }
   function isStandaloneApp() {
@@ -1485,16 +2905,29 @@
         danger: true
       });
       if (!confirmed) return;
-      await repository.deleteEvent(event.id);
+      const mutation = await repository.deleteEventOptimistic(event.id);
       navigate(`day/${event.startAt.slice(0, 10)}`);
       showToast("\u4E88\u7D04\u3092\u524A\u9664\u3057\u307E\u3057\u305F", {
         duration: 8e3,
         actionLabel: "\u5143\u306B\u623B\u3059",
         onAction: async () => {
-          await repository.createEvent(reservationInputFromEvent(event));
+          try {
+            await mutation.committed;
+          } catch {
+            return;
+          }
+          const restore = repository.createEventOptimistic(reservationInputFromEvent(event));
           navigate(`day/${event.startAt.slice(0, 10)}`);
           showToast("\u4E88\u7D04\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F");
+          observeMutation(restore, {
+            title: "\u4E88\u7D04\u3092\u5FA9\u5143\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+            rollbackMessage: "\u5FA9\u5143\u7528\u306E\u4EEE\u4E88\u7D04\u3092\u53D6\u308A\u6D88\u3057\u307E\u3057\u305F\u3002"
+          });
         }
+      });
+      observeMutation(mutation, {
+        title: "\u4E88\u7D04\u3092\u524A\u9664\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+        rollbackMessage: "\u524A\u9664\u524D\u306E\u4E88\u7D04\u3092\u753B\u9762\u306B\u623B\u3057\u307E\u3057\u305F\u3002"
       });
     }
   }
@@ -1521,13 +2954,16 @@
       showFormMessage("\u304A\u5BA2\u69D8\u540D\u307E\u305F\u306F\u4E88\u5B9A\u540D\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
       return;
     }
-    const conflicts = await repository.findConflicts(input, eventId);
-    if (conflicts.length) {
-      const conflict = conflicts[0];
+    const analysis = repository.analyzeBooking ? await repository.analyzeBooking(input, eventId) : {
+      conflicts: await repository.findConflicts(input, eventId),
+      bufferWarnings: await repository.findBufferWarnings(input, eventId)
+    };
+    if (analysis.conflicts.length) {
+      const conflict = analysis.conflicts[0];
       showFormMessage(`\u540C\u3058\u62C5\u5F53\u8005\u306B ${conflict.startAt.slice(11, 16)}\u301C${conflict.endAt.slice(11, 16)} \u306E\u4E88\u7D04\u304C\u3042\u308A\u307E\u3059\u3002\u6642\u9593\u3092\u5909\u66F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002`);
       return;
     }
-    const bufferWarnings = await repository.findBufferWarnings(input, eventId);
+    const bufferWarnings = analysis.bufferWarnings;
     const bufferWarningSummary = bufferWarnings.length ? `
     <div class="booking-buffer-warning" role="note">
       <strong>\u524D\u5F8C30\u5206\u306E\u78BA\u8A8D</strong>
@@ -1554,13 +2990,22 @@
     });
     if (!confirmed) return;
     if (eventId) {
-      await repository.updateEvent(eventId, input);
+      const mutation = await repository.updateEventOptimistic(eventId, input);
+      navigate(`day/${date}`);
       showToast("\u4E88\u7D04\u3092\u5909\u66F4\u3057\u307E\u3057\u305F");
+      observeMutation(mutation, {
+        title: "\u4E88\u7D04\u306E\u5909\u66F4\u3092\u4FDD\u5B58\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+        rollbackMessage: "\u5909\u66F4\u524D\u306E\u4E88\u7D04\u5185\u5BB9\u306B\u623B\u3057\u307E\u3057\u305F\u3002"
+      });
     } else {
-      await repository.createEvent(input);
+      const mutation = repository.createEventOptimistic(input);
+      navigate(`day/${date}`);
       showToast("\u4E88\u7D04\u3092\u767B\u9332\u3057\u307E\u3057\u305F");
+      observeMutation(mutation, {
+        title: "\u4E88\u7D04\u3092\u767B\u9332\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F",
+        rollbackMessage: "\u753B\u9762\u4E0A\u306E\u4EEE\u4E88\u7D04\u3092\u53D6\u308A\u6D88\u3057\u307E\u3057\u305F\u3002"
+      });
     }
-    navigate(`day/${date}`);
   }
   app.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");
@@ -1576,6 +3021,10 @@
     if (event.target.id === "bookingType") syncBookingTypeField();
   });
   window.addEventListener("hashchange", renderRoute);
+  window.addEventListener("online", () => {
+    const route = parseRoute();
+    if (["month", "week", "day"].includes(route.name)) void renderRoute({ forceRefresh: true });
+  });
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     appState.installPrompt = event;
