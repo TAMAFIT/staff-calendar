@@ -14,10 +14,20 @@ function ensureConfigured(url) {
   throw new Error("Googleカレンダー連携のURLが未設定です。Apps Scriptをデプロイしてから src/config.js に /exec URL を設定してください。");
 }
 
-function ensureSuccess(payload) {
+// Apps Script may report an error after successfully creating the calendar
+// event (e.g. during metadata/audit/property persistence). An unknown error
+// is not evidence that removing a local pending reservation is safe.
+function isDefinitiveRejection(message) {
+  return /同じ担当トレーナーに重複する予約があります|予約が見つかりませんでした|未対応の操作です|確認してください|入力してください|一致しません|予約IDがありません/.test(String(message || ""));
+}
+
+function ensureSuccess(payload, { mutation = false } = {}) {
   if (payload?.status === "success") return payload;
   const error = new Error(payload?.message || "Googleカレンダーとの通信に失敗しました。");
-  error.retryable = false;
+  error.retryable = typeof payload?.retryable === "boolean"
+    ? payload.retryable
+    : mutation && !isDefinitiveRejection(error.message);
+  if (typeof payload?.code === "string") error.code = payload.code;
   throw error;
 }
 
@@ -88,11 +98,11 @@ export class GoogleCalendarRepository extends CalendarRepository {
           body
         });
         if (!response.ok) {
-          const transient = response.status === 429 || response.status >= 500;
-          if (attempt + 1 < attempts && transient) continue;
-          throw connectionError("Googleカレンダーに接続できませんでした。", null, { retryable: transient });
+          // Even an HTTP 4xx from the GAS proxy does not prove the mutation
+          // was never applied. Preserve the pending operation in the outbox.
+          throw connectionError(`Googleカレンダーに接続できませんでした。（HTTP ${response.status}）`);
         }
-        return ensureSuccess(await response.json());
+        return ensureSuccess(await response.json(), { mutation: Boolean(data.mutationId) });
       } catch (error) {
         if (error?.retryable === false) throw error;
         if (attempt + 1 < attempts) continue;
