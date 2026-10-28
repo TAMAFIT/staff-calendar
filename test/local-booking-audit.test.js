@@ -74,3 +74,25 @@ test("a remote canonical ID is reserved for its local record before content matc
 test("Japanese diagnostic heading remains readable", () => {
   assert.match(renderBookingAuditPanel(), /端末とGoogleの予約照合/);
 });
+
+test("local 森様 and Google 森 at same time are the same reservation", () => {
+  const differences = compareBookings({
+    records: [local("local:pending-creation", "森様")],
+    outbox: [{ targetId: "local:pending-creation", kind: "create" }]
+  }, [local("actual-google-id", "森")]);
+  assert.deepEqual(differences, []);
+});
+
+test("different spelling at same trainer/time is a mismatch, not false missing", () => {
+  const result = compareBookings({ records: [local("local:new", "森井")], outbox: [] }, [local("actual", "森")]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].kind, "different");
+  assert.equal(result[0].remote.customerName, "森");
+});
+
+test("full-width whitespace and honorific variants are equivalent", () => {
+  assert.deepEqual(compareBookings({
+    records: [local("local:new", " 森　様 ")],
+    outbox: []
+  }, [local("actual","森")]), []);
+});
