@@ -22,6 +22,7 @@ import {
   toISODate
 } from "./utils/date.js";
 import { escapeHtml } from "./utils/html.js";
+import { renderBookingAuditPanel, runBookingAudit } from "./local-booking-audit.js";
 import { renderBookingForm } from "./views/booking-form-view.js";
 import { renderDayView } from "./views/day-view.js";
 import { renderHistoryView } from "./views/history-view.js";
@@ -145,7 +146,7 @@ function getReturnLocation(fallbackDate = new Date()) {
 function renderCalendar(config) {
   const cached = repository.getCachedEvents(config.startDate, config.endDate);
   const history = repository.getCachedHistory?.() || [];
-  app.innerHTML = config.render(cached.events, history);
+  app.innerHTML = config.render(cached.events, history).replace("</main>", `${renderBookingAuditPanel()}</main>`);
   if (config.view) saveLastView(config.view);
   syncInstallBanner();
 
@@ -154,6 +155,11 @@ function renderCalendar(config) {
       // Reads never block the operator. The last local snapshot remains visible.
     });
   }
+}
+
+function refreshAuditPanel() {
+  const panel = app.querySelector("[data-booking-audit]");
+  if (panel) panel.outerHTML = renderBookingAuditPanel();
 }
 
 function syncHistorySelectionBar() {
@@ -411,6 +417,10 @@ async function handleAction(button) {
     historyOrganizeMode = false;
     rememberReturnLocation();
     navigate("history");
+    return;
+  }
+  if (action === "run-booking-audit") {
+    await runBookingAudit(refreshAuditPanel);
     return;
   }
   if (action === "history-organize") {
