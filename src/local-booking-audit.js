@@ -3,7 +3,7 @@ import { GoogleCalendarRepository } from "./services/google-calendar-repository.
 
 const STORAGE_KEY = "tamafit_staff_calendar_local_first_v1";
 const MONTH_LIMIT = 36;
-const TRAINERS = { tamai: "??", obayashi: "??" };
+const TRAINERS = { tamai: "玉井", obayashi: "大林" };
 let state = { phase: "idle", checkedAt: 0, fingerprint: "", results: [], checkedCount: 0, error: "" };
 let pendingAudit = null;
 
@@ -13,12 +13,12 @@ function validDate(event) {
 }
 
 export function readLocalAuditSnapshot(storage) {
-  if (!storage) throw new Error("??????????????????");
+  if (!storage) throw new Error("この端末の保存領域を読み取れません。");
   const parse = (key) => {
     const raw = storage.getItem(key);
     if (raw === null) return [];
     const value = JSON.parse(raw);
-    if (!Array.isArray(value)) throw new Error("???????????????????");
+    if (!Array.isArray(value)) throw new Error("端末の予約データ形式を確認できません。");
     return value;
   };
   return {
@@ -33,7 +33,7 @@ function fingerprintOf(snapshot) {
 
 export function getAuditRanges(records) {
   const months = [...new Set(records.map(validDate).filter(Boolean).map((day) => day.slice(0, 7)))].sort();
-  if (months.length > MONTH_LIMIT) throw new Error("???????????????????????????");
+  if (months.length > MONTH_LIMIT) throw new Error("端末の予約期間が広すぎます。照合範囲の分割が必要です。");
   const groups = [];
   for (const month of months) {
     const current = groups.at(-1);
@@ -105,15 +105,15 @@ function panelResults(results) {
   return results.map(({ kind, local, remote, pending }) => {
     const dt = String(local.startAt || "");
     const end = String(local.endAt || "");
-    const trainer = TRAINERS[local.trainerId] || "?????";
-    const subtitle = kind === "missing" ? "Google?????????" : "Google???????";
+    const trainer = TRAINERS[local.trainerId] || "担当未指定";
+    const subtitle = kind === "missing" ? "Googleに該当する予約なし" : "Googleと内容が不一致";
     const googleText = remote
-      ? `<p class="booking-audit__remote">Google??${escapeHtml(remote.customerName || "????")} / ${escapeHtml(String(remote.startAt || "").slice(11,16))}?${escapeHtml(String(remote.endAt || "").slice(11,16))}</p>`
+      ? `<p class="booking-audit__remote">Google側：${escapeHtml(remote.customerName || "名前なし")} / ${escapeHtml(String(remote.startAt || "").slice(11,16))}?${escapeHtml(String(remote.endAt || "").slice(11,16))}</p>`
       : "";
     return `<li class="booking-audit__item">
       <div><strong>${escapeHtml(dt.slice(0, 10).replaceAll("-", "/"))} ${escapeHtml(dt.slice(11,16))}?${escapeHtml(end.slice(11,16))}</strong>
       <span class="booking-audit__label">${subtitle}</span></div>
-      <div>${escapeHtml(local.customerName || "????")} / ${escapeHtml(trainer)}${pending ? ' <strong class="booking-audit__pending">?????????????</strong>' : ""}</div>
+      <div>${escapeHtml(local.customerName || "名前なし")} / ${escapeHtml(trainer)}${pending ? ' <strong class="booking-audit__pending">［端末内の未同期処理あり］</strong>' : ""}</div>
       ${googleText}
     </li>`;
   }).join("");
@@ -140,31 +140,31 @@ const STYLES = `<style>
 export function renderBookingAuditPanel() {
   let snapshot;
   try { snapshot = currentSnapshot(); } catch (error) {
-    return `<section class="booking-audit" data-booking-audit>${STYLES}<h2>???Google???????????</h2><p class="booking-audit__error">${escapeHtml(error.message || "?????????????????")}</p></section>`;
+    return `<section class="booking-audit" data-booking-audit>${STYLES}<h2>端末とGoogleの予約照合（試験機能）</h2><p class="booking-audit__error">${escapeHtml(error.message || "端末の保存データを読み取れません。")}</p></section>`;
   }
   const changed = state.checkedAt && state.fingerprint !== fingerprintOf(snapshot);
   const status = state.phase === "checking"
-    ? '<p role="status">Google??????????????</p>'
+    ? '<p role="status">Googleカレンダーと照合しています…</p>'
     : state.phase === "error"
-      ? `<p class="booking-audit__error" role="alert">???????????${escapeHtml(state.error)}???????????????????</p>`
+      ? `<p class="booking-audit__error" role="alert">照合できませんでした：${escapeHtml(state.error)}。予約がないという意味ではありません。</p>`
       : state.checkedAt && changed
-        ? '<p class="booking-audit__warning">??????????????????????????????</p>'
+        ? '<p class="booking-audit__warning">照合後に端末の予約データが変わりました。再照合してください。</p>'
         : state.checkedAt && state.results.length
-          ? `<p class="booking-audit__warning" role="status">?????????Google?? ${state.results.length} ?????????</p><ul class="booking-audit__list">${panelResults(state.results)}</ul>`
+          ? `<p class="booking-audit__warning" role="status">要確認：アプリ側とGoogle側で ${state.results.length} 件の差があります。</p><ul class="booking-audit__list">${panelResults(state.results)}</ul>`
           : state.checkedAt
-            ? `<p class="booking-audit__success" role="status">??????????? ${state.checkedCount} ????????????????</p>`
-            : "<p>???????????</p>";
+            ? `<p class="booking-audit__success" role="status">照合した端末保存の予約 ${state.checkedCount} 件に差分は見つかりませんでした。</p>`
+            : "<p>まだ照合していません。</p>";
   const stamp = state.checkedAt ? new Date(state.checkedAt).toLocaleString("ja-JP", {timeZone:"Asia/Tokyo"}) : "";
-  return `<section class="booking-audit" data-booking-audit aria-label="Google??????">
+  return `<section class="booking-audit" data-booking-audit aria-label="Googleとの予約照合">
     ${STYLES}
-    <h2>???Google???????????</h2>
-    <p class="booking-audit__muted">??????????????? ${snapshot.records.length} ??Google??????????????????????????????????????????</p>
-    <button class="booking-audit__button" type="button" data-action="run-booking-audit" ${state.phase === "checking" ? "disabled" : ""}>Google?????</button>
-    ${stamp ? `<p class="booking-audit__muted">?????${escapeHtml(stamp)}?Google?????20??????????????</p>` : ""}
+    <h2>端末とGoogleの予約照合（試験機能）</h2>
+    <p class="booking-audit__muted">このスマホに保存されている予約 ${snapshot.records.length} 件をGoogleGoogleカレンダーの実データと比較します。他のスタッフのスマホも、それぞれ照合してください。</p>
+    <button class="booking-audit__button" type="button" data-action="run-booking-audit" ${state.phase === "checking" ? "disabled" : ""}>Googleと照合する</button>
+    ${stamp ? `<p class="booking-audit__muted">前回照合：${escapeHtml(stamp)}（Google側は最大約20秒のキャッシュがあり得ます）</p>` : ""}
     ${status}
-    <p class="booking-audit__muted">???????????????????????????</p>
+    <p class="booking-audit__muted">この機能は表示のみで、予約を変更・登録・削除しません。</p>
     ${state.results.some((item) => item.pending) && !changed && state.phase !== "error"
-      ? '<p class="booking-audit__warning">????????????????????????????????????????????????????????</p>' : ""}
+      ? '<p class="booking-audit__warning">未同期予約を入れ直すと、後の自動再送で二重予約になる可能性があります。再登録する前に同期状態を確認してください。</p>' : ""}
   </section>`;
 }
 
@@ -172,7 +172,7 @@ export async function runBookingAudit(refreshPanel) {
   if (pendingAudit) return pendingAudit;
   let snapshot;
   try { snapshot = currentSnapshot(); } catch (error) {
-    state = { ...state, phase: "error", error: error.message || "?????????????????" };
+    state = { ...state, phase: "error", error: error.message || "端末の保存データを読み取れません。" };
     refreshPanel();
     return;
   }
@@ -185,7 +185,7 @@ export async function runBookingAudit(refreshPanel) {
       const serverLists = await Promise.all(ranges.map(({ startDate, endDate }) => source.listEvents(startDate, endDate)));
       const latest = currentSnapshot();
       if (fingerprintOf(snapshot) !== fingerprintOf(latest)) {
-        throw new Error("????????????????????????????????");
+        throw new Error("照合中に端末の予約内容が変わりました。もう一度照合してください。");
       }
       const remote = serverLists.flat();
       state = {
@@ -197,7 +197,7 @@ export async function runBookingAudit(refreshPanel) {
         error: ""
       };
     } catch (error) {
-      state = { ...state, phase: "error", error: error.message || "??????????" };
+      state = { ...state, phase: "error", error: error.message || "通信に失敗しました。" };
     } finally {
       pendingAudit = null;
       refreshPanel();
