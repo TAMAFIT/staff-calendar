@@ -37,6 +37,7 @@ let lastCalendarHash = "";
 let renderScheduled = false;
 let historyOrganizeMode = false;
 let historyRefreshInFlight = false;
+const syncPanelState = { busy: false, message: "", warning: false };
 
 function ensureOperatorDialog() {
   let dialog = document.getElementById("operatorDialog");
@@ -146,7 +147,7 @@ function getReturnLocation(fallbackDate = new Date()) {
 function renderCalendar(config) {
   const cached = repository.getCachedEvents(config.startDate, config.endDate);
   const history = repository.getCachedHistory?.() || [];
-  app.innerHTML = config.render(cached.events, history).replace("</main>", `${renderBookingAuditPanel()}</main>`);
+  app.innerHTML = config.render(cached.events, history).replace("</main>", `${renderBookingAuditPanel({ syncState: syncPanelState })}</main>`);
   if (config.view) saveLastView(config.view);
   syncInstallBanner();
 
@@ -159,7 +160,7 @@ function renderCalendar(config) {
 
 function refreshAuditPanel() {
   const panel = app.querySelector("[data-booking-audit]");
-  if (panel) panel.outerHTML = renderBookingAuditPanel();
+  if (panel) panel.outerHTML = renderBookingAuditPanel({ syncState: syncPanelState });
 }
 
 function syncHistorySelectionBar() {
@@ -423,6 +424,43 @@ async function handleAction(button) {
     await runBookingAudit(refreshAuditPanel);
     return;
   }
+  if (action === "retry-booking-sync") {
+    if (syncPanelState.busy) return;
+    syncPanelState.busy = true;
+    syncPanelState.message = "";
+    refreshAuditPanel();
+    try {
+      const result = await repository.retryPendingNow();
+      const remaining = Number(result?.remaining || 0);
+      if (result?.status === "done") {
+        syncPanelState.message = remaining
+          ? `Googleへ${result.succeeded || 0}件送信しました。未同期が${remaining}件残っています。`
+          : "未同期操作を送信できました。Googleとの照合をもう一度行ってください。";
+        syncPanelState.warning = remaining > 0;
+      } else {
+        const messages = {
+          empty: "未同期の操作はありません。",
+          busy: "自動同期が進行中です。終了後にもう一度確認してください。",
+          offline: "インターネット接続がありません。接続してから再試行してください。",
+          review: "Google側に同じ時間帯の別IDの予約があります。二重登録の危険があるため、この操作と後続の送信を停止しました。",
+          retrying: "送信に失敗しました。端末内の予約を保持し、自動再試行を継続します。",
+          rejected: "Google側が操作を拒否しました。予約の状態を確認してください。"
+        };
+        syncPanelState.message = (messages[result?.status] || "同期結果を確認してください。") +
+          (result?.reason ? ` 詳細：${result.reason}` : "") +
+          (remaining ? `（未同期${remaining}件）` : "");
+        syncPanelState.warning = !["empty"].includes(result?.status);
+      }
+    } catch (error) {
+      syncPanelState.message = "同期を確認できませんでした：" + String(error?.message || "通信エラー");
+      syncPanelState.warning = true;
+    } finally {
+      syncPanelState.busy = false;
+      refreshAuditPanel();
+    }
+    return;
+  }
+
   if (action === "history-organize") {
     historyOrganizeMode = true;
     renderHistoryScreen({ refresh: false });
@@ -567,6 +605,21 @@ window.addEventListener("online", () => {
   const config = calendarRouteConfig(parseRoute());
   if (config) repository.refreshEvents(config.startDate, config.endDate).catch(() => {});
 });
+// Mobile browsers suspend retry timers while the app is in the background.
+// Resume normal (guarded) synchronization when the user returns, and while
+// the staff calendar remains open. No background execution is promised.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    repository.syncNow?.();
+    scheduleLocalRender();
+  }
+});
+window.addEventListener("focus", () => {
+  if (!document.hidden) repository.syncNow?.();
+});
+setInterval(() => {
+  if (!document.hidden && repository.outbox?.length) repository.syncNow?.();
+}, 60_000);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   appState.installPrompt = event;

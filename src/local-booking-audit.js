@@ -145,7 +145,7 @@ const STYLES = `<style>
 .booking-audit__success{font-weight:750;color:#0e6e41}
 </style>`;
 
-export function renderBookingAuditPanel() {
+export function renderBookingAuditPanel({ syncState = {} } = {}) {
   let snapshot;
   try { snapshot = currentSnapshot(); } catch (error) {
     return `<section class="booking-audit" data-booking-audit>${STYLES}<h2>端末とGoogleの予約照合（試験機能）</h2><p class="booking-audit__error">${escapeHtml(error.message || "端末の保存データを読み取れません。")}</p></section>`;
@@ -168,9 +168,16 @@ export function renderBookingAuditPanel() {
     <h2>端末とGoogleの予約照合（試験機能）</h2>
     <p class="booking-audit__muted">このスマホに保存されている予約 ${snapshot.records.length} 件をGoogleカレンダーの実データと比較します。他のスタッフのスマホも、それぞれ照合してください。</p>
     <button class="booking-audit__button" type="button" data-action="run-booking-audit" ${state.phase === "checking" ? "disabled" : ""}>Googleと照合する</button>
+    ${snapshot.outbox.length ? `<div class="booking-audit__warning" role="status">
+      <strong>この端末の未同期操作：${snapshot.outbox.length}件</strong>
+      <p>${escapeHtml(snapshot.outbox[0]?.lastError || "Googleへの反映を確認できていない操作があります。")}</p>
+      <button class="booking-audit__button" type="button" data-action="retry-booking-sync" ${syncState.busy ? "disabled" : ""}>${syncState.busy ? "送信を確認中…" : "未同期予約をGoogleへ同期"}</button>
+      <p class="booking-audit__muted">先頭から順番に再送します。Googleに同じ担当者・時間帯の予約がある場合は安全のため停止します。</p>
+    </div>` : `<p class="booking-audit__success">この端末の未同期操作：0件</p>`}
+    ${syncState.message ? `<p class="${syncState.warning ? "booking-audit__warning" : "booking-audit__success"}" role="status">${escapeHtml(syncState.message)}</p>` : ""}
     ${stamp ? `<p class="booking-audit__muted">前回照合：${escapeHtml(stamp)}（Google側は最大約20秒のキャッシュがあり得ます）</p>` : ""}
     ${status}
-    <p class="booking-audit__muted">この機能は表示のみで、予約を変更・登録・削除しません。</p>
+    <p class="booking-audit__muted">「Googleと照合する」は読み取り専用です。「未同期予約をGoogleへ同期」だけが予約を再送します。</p>
     ${state.results.some((item) => item.pending) && !changed && state.phase !== "error"
       ? '<p class="booking-audit__warning">未同期予約を入れ直すと、後の自動再送で二重予約になる可能性があります。再登録する前に同期状態を確認してください。</p>' : ""}
   </section>`;
