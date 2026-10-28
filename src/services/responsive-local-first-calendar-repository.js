@@ -362,7 +362,14 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("未同期予約の日付を確認できません。");
             const remote = await this.source.listEvents(date, date);
             const collisions = remote.filter((event) => (
-              String(event.trainerId || "") === String(op.input?.trainerId || "")
+              (
+                String(event.trainerId || "") === String(op.input?.trainerId || "")
+                || (
+                  !event.trainerId
+                  && String(event.customerName || "").replace(/様+$/, "").trim() ===
+                    String(op.input?.customerName || "").replace(/様+$/, "").trim()
+                )
+              )
               && String(event.startAt || "") < String(op.input?.endAt || "")
               && String(op.input?.startAt || "") < String(event.endAt || "")
             ));
