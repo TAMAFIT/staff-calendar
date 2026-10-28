@@ -54,7 +54,7 @@ export function getAuditRanges(records) {
 function normalizedCustomerName(value) {
   return String(value || "")
     .normalize("NFKC")
-    .replace(/[\\s\\u3000]/g, "")
+    .replace(/[\s\u3000]/g, "")
     .replace(/様+$/u, "");
 }
 
