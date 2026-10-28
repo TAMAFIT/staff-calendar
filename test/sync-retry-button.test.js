@@ -130,3 +130,22 @@ test("manual retry cannot bypass a collision to drain later dependent changes", 
     assert.equal(repo.outbox.length, 2);
   } finally { dispose(repo); }
 });
+
+test("manual retry blocks possible partial create with missing Google trainer metadata", async () => {
+  let creates = 0;
+  let remote = [];
+  const source = {
+    listEvents: async () => remote,
+    createEvent: async () => { creates++; throw retryableError(); }
+  };
+  const repo = repository(source, "missing-metadata");
+  try {
+    repo.createEventOptimistic(booking);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    remote = [{ ...booking, id: "google-incomplete", trainerId: "" }];
+    const result = await repo.retryPendingNow();
+    assert.equal(result.status, "review");
+    assert.equal(creates, 1);
+    assert.equal(repo.outbox.length, 1);
+  } finally { dispose(repo); }
+});
