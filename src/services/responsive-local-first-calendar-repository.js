@@ -319,46 +319,99 @@ export class ResponsiveLocalFirstCalendarRepository extends LocalFirstCalendarRe
     this.emitChange();
   }
 
-  async syncNow() {
-    if (this.syncing) return;
+  async retryPendingNow() {
+    return this.syncNow({ manual: true });
+  }
+
+  async syncNow({ manual = false } = {}) {
+    if (this.syncing) return { status: "busy", remaining: this.outbox.length };
     if (!this.outbox.length) {
       this.syncHistoryDeletes();
-      return;
+      return { status: "empty", remaining: 0 };
     }
-    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return { status: "offline", remaining: this.outbox.length };
+    }
+
     this.syncing = true;
     clearTimeout(this.retryTimer);
-
+    let succeeded = 0;
+    let status = "done";
+    let reason = "";
     try {
       while (this.outbox.length) {
         const op = this.outbox[0];
-        if (op.nextAttemptAt && op.nextAttemptAt > this.now()) {
+        if (op.needsReview && !manual) {
+          status = "review";
+          reason = op.lastError || "Google側に重複の可能性があるため、自動再送を停止しています。";
+          break;
+        }
+        if (!manual && op.nextAttemptAt && op.nextAttemptAt > this.now()) {
           const delay = Math.max(50, op.nextAttemptAt - this.now());
           clearTimeout(this.retryTimer);
           this.retryTimer = setTimeout(() => this.syncNow(), delay);
+          status = "waiting";
           break;
         }
 
         try {
+          // For retrying an uncertain create, read the live calendar first.
+          // Never infer two different event IDs are the same reservation.
+          if (op.kind === "create" && (manual || Number(op.attempts || 0) > 0 || op.needsReview)) {
+            const date = String(op.input?.startAt || "").slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("未同期予約の日付を確認できません。");
+            const remote = await this.source.listEvents(date, date);
+            const collisions = remote.filter((event) => (
+              String(event.trainerId || "") === String(op.input?.trainerId || "")
+              && String(event.startAt || "") < String(op.input?.endAt || "")
+              && String(op.input?.startAt || "") < String(event.endAt || "")
+            ));
+            if (collisions.length) {
+              op.needsReview = true;
+              op.lastError = "Googleに同じ担当者・時間帯の別IDの予約があります。二重登録を避けるため送信を止めました。";
+              op.lastAttemptAt = this.now();
+              this.persist();
+              this.emitChange();
+              status = "review";
+              reason = op.lastError;
+              break;
+            }
+            op.needsReview = false;
+          }
+          if (manual) {
+            // A deliberate retry can bypass only the timer, not duplicate checks.
+            op.nextAttemptAt = 0;
+            this.persist();
+          }
           await this.syncOperation(op);
           this.outbox.shift();
+          succeeded += 1;
           this.persist();
           this.emitChange();
         } catch (error) {
+          op.lastError = String(error?.message || "Googleへの同期に失敗しました。");
+          op.lastAttemptAt = this.now();
           if (error?.retryable !== false) {
             this.scheduleRetry(op, error);
+            this.emitChange();
+            status = "retrying";
+            reason = op.lastError;
             break;
           }
           this.rollback(op, error);
+          status = "rejected";
+          reason = String(error?.message || "Googleへの同期が拒否されました。");
         }
       }
     } finally {
       this.syncing = false;
+      this.emitChange();
     }
 
     this.syncHistoryDeletes();
     if (!this.outbox.length && (this.hiddenHistoryMutationIds.size || this.hiddenHistorySemanticKeys.size)) {
       this.refreshHistory().catch(() => {});
     }
+    return { status, succeeded, remaining: this.outbox.length, reason };
   }
 }
