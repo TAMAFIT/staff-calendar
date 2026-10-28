@@ -1,4 +1,4 @@
-const CACHE_NAME = "tamafit-staff-calendar-v28";
+const CACHE_NAME = "tamafit-staff-calendar-v29";
 const APP_ENTRY_URL = new URL("./index.html", self.location.href).href;
 const APP_SHELL = [
   "./",
