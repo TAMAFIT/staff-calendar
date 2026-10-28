@@ -108,10 +108,10 @@ function panelResults(results) {
     const trainer = TRAINERS[local.trainerId] || "担当未指定";
     const subtitle = kind === "missing" ? "Googleに該当する予約なし" : "Googleと内容が不一致";
     const googleText = remote
-      ? `<p class="booking-audit__remote">Google側：${escapeHtml(remote.customerName || "名前なし")} / ${escapeHtml(String(remote.startAt || "").slice(11,16))}?${escapeHtml(String(remote.endAt || "").slice(11,16))}</p>`
+      ? `<p class="booking-audit__remote">Google側：${escapeHtml(remote.customerName || "名前なし")} / ${escapeHtml(String(remote.startAt || "").slice(11,16))}〜${escapeHtml(String(remote.endAt || "").slice(11,16))}</p>`
       : "";
     return `<li class="booking-audit__item">
-      <div><strong>${escapeHtml(dt.slice(0, 10).replaceAll("-", "/"))} ${escapeHtml(dt.slice(11,16))}?${escapeHtml(end.slice(11,16))}</strong>
+      <div><strong>${escapeHtml(dt.slice(0, 10).replaceAll("-", "/"))} ${escapeHtml(dt.slice(11,16))}〜${escapeHtml(end.slice(11,16))}</strong>
       <span class="booking-audit__label">${subtitle}</span></div>
       <div>${escapeHtml(local.customerName || "名前なし")} / ${escapeHtml(trainer)}${pending ? ' <strong class="booking-audit__pending">［端末内の未同期処理あり］</strong>' : ""}</div>
       ${googleText}
@@ -158,7 +158,7 @@ export function renderBookingAuditPanel() {
   return `<section class="booking-audit" data-booking-audit aria-label="Googleとの予約照合">
     ${STYLES}
     <h2>端末とGoogleの予約照合（試験機能）</h2>
-    <p class="booking-audit__muted">このスマホに保存されている予約 ${snapshot.records.length} 件をGoogleGoogleカレンダーの実データと比較します。他のスタッフのスマホも、それぞれ照合してください。</p>
+    <p class="booking-audit__muted">このスマホに保存されている予約 ${snapshot.records.length} 件をGoogleカレンダーの実データと比較します。他のスタッフのスマホも、それぞれ照合してください。</p>
     <button class="booking-audit__button" type="button" data-action="run-booking-audit" ${state.phase === "checking" ? "disabled" : ""}>Googleと照合する</button>
     ${stamp ? `<p class="booking-audit__muted">前回照合：${escapeHtml(stamp)}（Google側は最大約20秒のキャッシュがあり得ます）</p>` : ""}
     ${status}
