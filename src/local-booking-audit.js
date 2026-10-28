@@ -75,18 +75,8 @@ function compareKey(event) {
 }
 
 export function compareBookings(snapshot, remoteEvents) {
+  // IDs are authoritative. Never merge records because names or times happen to match.
   const byId = new Map(remoteEvents.map((event) => [String(event.id), event]));
-  const reservedRemoteIds = new Set();
-  // Match canonical IDs first. Content-based matching must not consume a
-  // server event that belongs to another local record with a matching ID.
-  for (const local of snapshot.records) {
-    if (validDate(local) && local?.id && byId.has(String(local.id))) {
-      reservedRemoteIds.add(String(local.id));
-    }
-  }
-  // Reserve all exact-ID matches first; then compare remaining server
-  // records one-to-one, so an unrelated duplicate cannot hide a missing booking.
-  const unclaimed = remoteEvents.filter((event) => !reservedRemoteIds.has(String(event.id)));
   const queued = new Set(snapshot.outbox.map((operation) => String(operation?.targetId || "")));
   const results = [];
   for (const local of snapshot.records) {
@@ -97,44 +87,42 @@ export function compareBookings(snapshot, remoteEvents) {
       if (compareKey(local) !== compareKey(remote)) {
         results.push({ kind: "different", local, remote, pending });
       }
-      continue;
-    }
-    const equivalentIndex = unclaimed.findIndex((event) => compareKey(event) === compareKey(local));
-    if (equivalentIndex >= 0) {
-      unclaimed.splice(equivalentIndex, 1);
-      continue;
-    }
-    // The same trainer and time with a different name/type is an apparent
-    // mismatch, not proof that Google has no reservation at this slot.
-    const slotIndex = unclaimed.findIndex((event) => slotKey(event) === slotKey(local));
-    if (slotIndex >= 0) {
-      const [sameSlot] = unclaimed.splice(slotIndex, 1);
-      results.push({ kind: "different", local, remote: sameSlot, pending });
     } else {
-      results.push({ kind: "missing", local, remote: null, pending });
+      // Same time with a different ID is still a separate event; show it only as
+      // a duplication warning, never as evidence that the IDs match.
+      const overlaps = remoteEvents.filter((event) => (
+        String(event.id) !== String(local.id)
+        && String(event.trainerId || "") === String(local.trainerId || "")
+        && String(event.startAt || "") < String(local.endAt || "")
+        && String(local.startAt || "") < String(event.endAt || "")
+      ));
+      results.push({ kind: "missing", local, remote: null, pending, overlaps });
     }
   }
   return results.sort((a, b) => String(a.local.startAt).localeCompare(String(b.local.startAt)));
 }
-
 function currentSnapshot() {
   return readLocalAuditSnapshot(globalThis.localStorage);
 }
 
 function panelResults(results) {
-  return results.map(({ kind, local, remote, pending }) => {
+  return results.map(({ kind, local, remote, pending, overlaps }) => {
     const dt = String(local.startAt || "");
     const end = String(local.endAt || "");
     const trainer = TRAINERS[local.trainerId] || "担当未指定";
-    const subtitle = kind === "missing" ? "Googleに該当する予約なし" : "Googleと内容が不一致";
+    const subtitle = kind === "missing" ? "Googleに同じIDの予約なし" : "Googleと内容が不一致";
     const googleText = remote
       ? `<p class="booking-audit__remote">Google側：${escapeHtml(remote.customerName || "名前なし")} / ${escapeHtml(String(remote.startAt || "").slice(11,16))}〜${escapeHtml(String(remote.endAt || "").slice(11,16))}</p>`
+      : "";
+    const overlapText = kind === "missing" && overlaps?.length
+      ? `<p class="booking-audit__warning">Google側の同時間帯に別IDの予約あり：${overlaps.slice(0, 3).map((event) => `${escapeHtml(event.customerName || "名前なし")}（${escapeHtml(String(event.startAt || "").slice(11, 16))}〜${escapeHtml(String(event.endAt || "").slice(11, 16))}）`).join("、")}。二重登録に注意してください。</p>`
       : "";
     return `<li class="booking-audit__item">
       <div><strong>${escapeHtml(dt.slice(0, 10).replaceAll("-", "/"))} ${escapeHtml(dt.slice(11,16))}〜${escapeHtml(end.slice(11,16))}</strong>
       <span class="booking-audit__label">${subtitle}</span></div>
       <div>${escapeHtml(local.customerName || "名前なし")} / ${escapeHtml(trainer)}${pending ? ' <strong class="booking-audit__pending">［端末内の未同期処理あり］</strong>' : ""}</div>
       ${googleText}
+      ${overlapText}
     </li>`;
   }).join("");
 }
