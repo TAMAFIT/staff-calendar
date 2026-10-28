@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readLocalAuditSnapshot, getAuditRanges, compareBookings } from "../src/local-booking-audit.js";
+import { readLocalAuditSnapshot, getAuditRanges, compareBookings, renderBookingAuditPanel } from "../src/local-booking-audit.js";
 
-const local = (id, name = "?", date = "2026-11-01") => ({
+const local = (id, name = "森", date = "2026-11-01") => ({
   id, customerName: name, trainerId: "obayashi",
   startAt: date + "T16:00:00", endAt: date + "T17:00:00",
   type: "member", duration: 60
@@ -16,11 +16,11 @@ test("the user's local booking absent from Google is listed", () => {
   const [item] = compareBookings(snapshot, []);
   assert.equal(item.kind, "missing");
   assert.equal(item.pending, true);
-  assert.equal(item.local.customerName, "?");
+  assert.equal(item.local.customerName, "森");
 });
 
 test("same event ID but different name is reported as a mismatch", () => {
-  const res = compareBookings({records:[local("google-1","???")],outbox:[]}, [local("google-1","?")]);
+  const res = compareBookings({records:[local("google-1","森さん")],outbox:[]}, [local("google-1","森")]);
   assert.equal(res.length, 1);
   assert.equal(res[0].kind, "different");
 });
@@ -69,4 +69,8 @@ test("a remote canonical ID is reserved for its local record before content matc
   },[local("google-1")]);
   assert.equal(actual.length,1);
   assert.equal(actual[0].local.id,"local:a");
+});
+
+test("Japanese diagnostic heading remains readable", () => {
+  assert.match(renderBookingAuditPanel(), /端末とGoogleの予約照合/);
 });
