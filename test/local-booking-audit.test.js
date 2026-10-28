@@ -29,8 +29,11 @@ test("same booking found by ID is not reported", () => {
   assert.deepEqual(compareBookings({records:[local("google-1")],outbox:[]},[local("google-1")]),[]);
 });
 
-test("equivalent booking re-created with another ID is not incorrectly called missing", () => {
-  assert.deepEqual(compareBookings({records:[local("local:create-1")],outbox:[]},[local("google-1")]),[]);
+test("matching details with a different ID are reported as a separate booking", () => {
+  const result = compareBookings({records:[local("local:create-1")],outbox:[]},[local("google-1")]);
+  assert.equal(result.length,1);
+  assert.equal(result[0].kind,"missing");
+  assert.equal(result[0].overlaps[0].id,"google-1");
 });
 
 test("server-side deletion of a locally cached booking is listed", () => {
@@ -53,13 +56,10 @@ test("no local records is a valid empty comparison", () => {
   assert.deepEqual(compareBookings({records:[],outbox:[]},[]),[]);
 });
 
-test("a single Google record cannot cover two identical local bookings", () => {
-  const actual = compareBookings({
-    records:[local("local:create-1"),local("local:create-2")],
-    outbox:[]
-  },[local("google-1")]);
-  assert.equal(actual.length,1);
-  assert.equal(actual[0].kind,"missing");
+test("one Google booking with a different ID cannot hide either local booking", () => {
+  const actual = compareBookings({records:[local("local:create-1"),local("local:create-2")],outbox:[]},[local("google-1")]);
+  assert.equal(actual.length,2);
+  assert.ok(actual.every((item)=>item.kind==="missing"));
 });
 
 test("a remote canonical ID is reserved for its local record before content matching", () => {
@@ -75,24 +75,29 @@ test("Japanese diagnostic heading remains readable", () => {
   assert.match(renderBookingAuditPanel(), /端末とGoogleの予約照合/);
 });
 
-test("local 森様 and Google 森 at same time are the same reservation", () => {
-  const differences = compareBookings({
-    records: [local("local:pending-creation", "森様")],
-    outbox: [{ targetId: "local:pending-creation", kind: "create" }]
-  }, [local("actual-google-id", "森")]);
-  assert.deepEqual(differences, []);
+test("different IDs remain distinct even with the same time and honorific variation", () => {
+  const result=compareBookings({records:[local("local:pending-creation","森様")],outbox:[{targetId:"local:pending-creation",kind:"create"}]},[local("actual-google-id","森")]);
+  assert.equal(result.length,1);
+  assert.equal(result[0].kind,"missing");
+  assert.equal(result[0].pending,true);
+  assert.equal(result[0].overlaps[0].id,"actual-google-id");
 });
 
-test("different spelling at same trainer/time is a mismatch, not false missing", () => {
-  const result = compareBookings({ records: [local("local:new", "森井")], outbox: [] }, [local("actual", "森")]);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].kind, "different");
-  assert.equal(result[0].remote.customerName, "森");
+test("different IDs at the same slot remain separate regardless of names", () => {
+  const result=compareBookings({records:[local("local:new","森井")],outbox:[]},[local("actual","森")]);
+  assert.equal(result.length,1);
+  assert.equal(result[0].kind,"missing");
+  assert.equal(result[0].overlaps[0].customerName,"森");
 });
 
-test("full-width whitespace and honorific variants are equivalent", () => {
-  assert.deepEqual(compareBookings({
-    records: [local("local:new", " 森　様 ")],
-    outbox: []
-  }, [local("actual","森")]), []);
+test("same ID with equivalent honorific variants is not an error", () => {
+  assert.deepEqual(compareBookings({records:[local("id-1"," 森　様 ")],outbox:[]},[local("id-1","森")]),[]);
+});
+
+test("overlapping Google time with a different ID is flagged without merging IDs", () => {
+  const remote = {...local("another-id","別の予約"),startAt:"2026-11-01T16:30:00",endAt:"2026-11-01T17:30:00"};
+  const result=compareBookings({records:[local("local:original","森")],outbox:[]},[remote]);
+  assert.equal(result.length,1);
+  assert.equal(result[0].kind,"missing");
+  assert.equal(result[0].overlaps.length,1);
 });
