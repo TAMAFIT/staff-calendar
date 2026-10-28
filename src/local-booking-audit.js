@@ -51,12 +51,25 @@ export function getAuditRanges(records) {
   }));
 }
 
-function compareKey(event) {
+function normalizedCustomerName(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[\\s\\u3000]/g, "")
+    .replace(/様+$/u, "");
+}
+
+function slotKey(event) {
   return [
     String(event.startAt || ""),
     String(event.endAt || ""),
-    String(event.customerName || "").trim(),
-    String(event.trainerId || ""),
+    String(event.trainerId || "")
+  ].join("|");
+}
+
+function compareKey(event) {
+  return [
+    slotKey(event),
+    normalizedCustomerName(event.customerName),
     String(event.type || "")
   ].join("|");
 }
@@ -71,13 +84,9 @@ export function compareBookings(snapshot, remoteEvents) {
       reservedRemoteIds.add(String(local.id));
     }
   }
-  const byContent = new Map();
-  for (const event of remoteEvents) {
-    if (reservedRemoteIds.has(String(event.id))) continue;
-    const key = compareKey(event);
-    if (!byContent.has(key)) byContent.set(key, []);
-    byContent.get(key).push(event);
-  }
+  // Reserve all exact-ID matches first; then compare remaining server
+  // records one-to-one, so an unrelated duplicate cannot hide a missing booking.
+  const unclaimed = remoteEvents.filter((event) => !reservedRemoteIds.has(String(event.id)));
   const queued = new Set(snapshot.outbox.map((operation) => String(operation?.targetId || "")));
   const results = [];
   for (const local of snapshot.records) {
@@ -88,10 +97,21 @@ export function compareBookings(snapshot, remoteEvents) {
       if (compareKey(local) !== compareKey(remote)) {
         results.push({ kind: "different", local, remote, pending });
       }
+      continue;
+    }
+    const equivalentIndex = unclaimed.findIndex((event) => compareKey(event) === compareKey(local));
+    if (equivalentIndex >= 0) {
+      unclaimed.splice(equivalentIndex, 1);
+      continue;
+    }
+    // The same trainer and time with a different name/type is an apparent
+    // mismatch, not proof that Google has no reservation at this slot.
+    const slotIndex = unclaimed.findIndex((event) => slotKey(event) === slotKey(local));
+    if (slotIndex >= 0) {
+      const [sameSlot] = unclaimed.splice(slotIndex, 1);
+      results.push({ kind: "different", local, remote: sameSlot, pending });
     } else {
-      const equivalent = byContent.get(compareKey(local));
-      if (equivalent?.length) equivalent.shift();
-      else results.push({ kind: "missing", local, remote: null, pending });
+      results.push({ kind: "missing", local, remote: null, pending });
     }
   }
   return results.sort((a, b) => String(a.local.startAt).localeCompare(String(b.local.startAt)));
